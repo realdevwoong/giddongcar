@@ -1,0 +1,5 @@
+<?xml version='1.0' ?>
+
+<launch>
+    <node pkg="pinky_gui" exec="fleet_map_view" output="screen"/>
+</launch>
