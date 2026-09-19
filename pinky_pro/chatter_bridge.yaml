@@ -1,0 +1,86 @@
+name: pinky_robots_bridge
+
+topics:
+  /robot1/cmd_vel:
+    from_domain: 0
+    to_domain: 15
+    type: geometry_msgs/msg/Twist
+    remap: /cmd_vel
+    bidirectional: true
+
+  /odom:
+    from_domain: 15
+    to_domain: 0
+    type: nav_msgs/msg/Odometry
+    remap: /robot1/odom
+    bidirectional: true
+
+  /scan:
+    from_domain: 15
+    to_domain: 0
+    type: sensor_msgs/msg/LaserScan
+    remap: /robot1/scan
+    bidirectional: true
+
+  /tf:
+    from_domain: 15
+    to_domain: 0
+    type: tf2_msgs/msg/TFMessage
+    remap: /robot1/tf
+    bidirectional: true
+
+  /tf_static:
+    from_domain: 15
+    to_domain: 0
+    type: tf2_msgs/msg/TFMessage
+    remap: /robot1/tf_static
+    bidirectional: true
+
+  /robot_description:
+    from_domain: 15
+    to_domain: 0
+    type: std_msgs/msg/String
+    remap: /robot1/robot_description
+    bidirectional: true
+
+  /robot2/cmd_vel:
+    from_domain: 0
+    to_domain: 17
+    type: geometry_msgs/msg/Twist
+    remap: /cmd_vel
+    bidirectional: true
+
+  /odom:
+    from_domain: 17
+    to_domain: 0
+    type: nav_msgs/msg/Odometry
+    remap: /robot2/odom
+    bidirectional: true
+
+  /scan:
+    from_domain: 17
+    to_domain: 0
+    type: sensor_msgs/msg/LaserScan
+    remap: /robot2/scan
+    bidirectional: true
+
+  /tf:
+    from_domain: 17
+    to_domain: 0
+    type: tf2_msgs/msg/TFMessage
+    remap: /robot2/tf
+    bidirectional: true
+
+  /tf_static:
+    from_domain: 17
+    to_domain: 0
+    type: tf2_msgs/msg/TFMessage
+    remap: /robot2/tf_static
+    bidirectional: true
+
+  /robot_description:
+    from_domain: 17
+    to_domain: 0
+    type: std_msgs/msg/String
+    remap: /robot2/robot_description
+    bidirectional: true
