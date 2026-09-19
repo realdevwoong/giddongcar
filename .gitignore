@@ -1,0 +1,13 @@
+# ROS2 colcon build artifacts (generated, not source)
+pinky_pro/build/
+pinky_pro/install/
+pinky_pro/log/
+
+# Secrets / credentials safety net
+*.pem
+*.key
+.env
+*_rsa
+*_ed25519
+credentials.json
+secrets.yaml
