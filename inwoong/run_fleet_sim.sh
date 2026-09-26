@@ -7,7 +7,7 @@
 #   ./run_fleet_sim.sh /path/to/other.yaml   # 다른 맵 사용 시 map_to_world.py로 world도 새로 만들 것
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE_DIR="$(dirname "$SCRIPT_DIR")"
+WORKSPACE_DIR="$(dirname "$SCRIPT_DIR")/pinky_pro"
 
 # ROS2 setup.bash는 set -u(nounset)와 호환되지 않으므로 여기선 켜지 않는다.
 source /opt/ros/jazzy/setup.bash
