@@ -48,10 +48,18 @@ ROS_DOMAIN_ID=15 ros2 run tf2_ros tf2_echo map base_link
 ROS_DOMAIN_ID=17 ros2 run tf2_ros tf2_echo map base_link
 ```
 
+## 실행 (Gazebo, 로봇 2대)
+
+```bash
+ros2 launch pinky_fleet sim.launch.py
+```
+
+Gazebo 월드에 로봇 2대를 띄우고(도메인 25/27) 위와 같은 Nav2 2개와 대시보드를 시뮬 시간으로 실행합니다. 초기 위치는 생성 위치인 robot1 (0, 0), robot2 (0, -1.0)입니다. 인자와 주의사항은 [docs/sim.md](../../../docs/sim.md).
+
 ## 아직 안 되는 것
 
-- **Gazebo에서는 로봇 위치가 표시되지 않습니다.** 대시보드와 Nav2가 실제 시계만 쓰기 때문입니다(`use_sim_time` 미지원).
 - 두 로봇의 작업 배정이나 좁은 통로 통행 우선순위 조정은 없습니다.
+- 대시보드의 `nav_ready`는 Nav2 액션 서버가 보이는지만 봅니다. Nav2 내부 활성화 실패는 잡지 못합니다.
 
 ## 테스트
 

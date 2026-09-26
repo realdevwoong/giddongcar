@@ -14,6 +14,7 @@ import rclpy
 from rclpy.context import Context
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.action import ActionClient
 from rclpy.time import Time
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy, qos_profile_sensor_data
@@ -49,10 +50,12 @@ def await_future(future, timeout=4):
 
 
 class Robot(Node):
-    def __init__(self, name, domain):
+    def __init__(self, name, domain, use_sim_time=False):
         self.ros_context = Context()
         rclpy.init(context=self.ros_context, domain_id=domain)
-        super().__init__(f'fleet_dashboard_{name}', context=self.ros_context)
+        # 시뮬 시간이면 now()가 /clock을 따라가서 Gazebo TF 스탬프가 2초 신선도 검사를 통과한다.
+        super().__init__(f'fleet_dashboard_{name}', context=self.ros_context,
+                         parameter_overrides=[Parameter('use_sim_time', value=use_sim_time)])
         self.robot_name, self.domain = name, domain
         self.lock = threading.RLock()
         self.command_lock = threading.Lock()
@@ -174,8 +177,9 @@ class Robot(Node):
             return '목적지 수락 — 이동 상태를 확인하세요.'
 
     def close(self):
-        self.ros_executor.shutdown(timeout_sec=2)
-        self.thread.join(timeout=2)
+        # launch는 SIGINT 후 5초면 SIGTERM으로 올리므로 로봇 2대 합쳐 그 안에 끝나야 한다.
+        self.ros_executor.shutdown(timeout_sec=1)
+        self.thread.join(timeout=1)
         self.destroy_node()
         self.ros_context.try_shutdown()
 
@@ -263,12 +267,15 @@ def main():
     parser.add_argument('--robot2-domain', type=int, default=17)
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8080)
+    parser.add_argument('--use-sim-time', action='store_true', help='Gazebo: /clock 시간을 쓴다')
     args = parser.parse_args()
+    # nohup이나 스크립트 백그라운드로 띄우면 SIGINT 무시가 상속돼 Ctrl+C로 안 꺼진다. 항상 KeyboardInterrupt를 받게 한다.
+    signal.signal(signal.SIGINT, signal.default_int_handler)
     robots = {}
     server = None
     try:
         for i, domain in enumerate((args.robot1_domain, args.robot2_domain), 1):
-            robots[f'robot{i}'] = Robot(f'robot{i}', domain)
+            robots[f'robot{i}'] = Robot(f'robot{i}', domain, args.use_sim_time)
         server = ThreadingHTTPServer((args.host, args.port), handler_for(Fleet(robots)))
         print(f'Fleet dashboard: http://{args.host}:{args.port}', flush=True)
         server.serve_forever()
