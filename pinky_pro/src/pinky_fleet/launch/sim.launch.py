@@ -101,6 +101,9 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(str(FLEET / 'launch/multi_robot.launch.py')),
             launch_arguments={'use_sim_time': 'true', 'map': config('map'),
                               'robot1_domain': config('robot1_domain'),
-                              'robot2_domain': config('robot2_domain')}.items(),
+                              'robot2_domain': config('robot2_domain'),
+                              # 생성 위치를 알고 있으니 초기 위치를 사람이 찍지 않아도 된다
+                              **{f'{r}_initial_pose': [config(f'{r}_x'), ',', config(f'{r}_y'), ',', config(f'{r}_yaw')]
+                                 for r in ('robot1', 'robot2')}}.items(),
             condition=IfCondition(config('fleet'))),
     ])

@@ -10,7 +10,7 @@ jinho가 만든 `jinho/` 폴더의 대시보드를 팀 공용 ROS 패키지로 �
 - 대시보드는 도메인마다 ROS context와 TF buffer를 따로 두고, 두 로봇을 하나의 공통 지도 위에 그립니다.
 - 두 로봇의 지도 내용(해시)이 다르면 그 로봇은 지도에 그리지 않고 목표 전송도 막습니다.
 - 위치는 odom이 아니라 `map → base_link` TF로 구합니다. 최근 odom이나 TF가 없으면 마커를 숨깁니다.
-- AMCL은 `set_initial_pose: false`로 실행해서, 두 로봇이 원점에 있다고 가정하지 않습니다.
+- AMCL은 `set_initial_pose: false`로 실행해서, 두 로봇이 원점에 있다고 가정하지 않습니다. 위치를 이미 알 때(시뮬)는 `robot1_initial_pose:=x,y,yaw`로 넘기면 그 로봇만 켜지자마자 그 자리로 잡습니다.
 
 ## 실행 (실물 로봇)
 
@@ -54,7 +54,7 @@ ROS_DOMAIN_ID=17 ros2 run tf2_ros tf2_echo map base_link
 ros2 launch pinky_fleet sim.launch.py
 ```
 
-실제 방(good3 지도)과 같은 Gazebo 월드에 로봇 2대를 띄우고(도메인 25/27) 위와 같은 Nav2 2개와 대시보드를 시뮬 시간으로 실행합니다. 초기 위치는 생성 위치인 robot1 (0.5, 0.5), robot2 (2.0, 0.5)입니다. 인자와 주의사항은 [docs/sim.md](../../../docs/sim.md).
+실제 방(good3 지도)과 같은 Gazebo 월드에 로봇 2대를 띄우고(도메인 25/27) 위와 같은 Nav2 2개와 대시보드를 시뮬 시간으로 실행합니다. 초기 위치는 생성 위치(robot1 (0.5, 0.5), robot2 (2.0, 0.5))로 자동으로 잡힙니다. 인자와 주의사항은 [docs/sim.md](../../../docs/sim.md).
 
 ## 아직 안 되는 것
 

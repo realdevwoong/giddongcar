@@ -18,14 +18,14 @@ ros2 launch pinky_fleet sim.launch.py
 
 브라우저에서 http://localhost:8080 을 연다.
 
-1. robot1 선택 → "초기 위치 설정" → 지도의 (0.5, 0.5)를 누르고 +x 방향(오른쪽)으로 드래그. 로봇이 생성되는 위치라 정확히 맞다.
-2. robot2도 같은 방법으로 (2.0, 0.5).
-3. "목적지 지정"으로 목표를 드래그한다. 두 로봇에 동시에 보내도 된다.
+1. 초기 위치는 **자동으로 잡힌다**(생성 위치 robot1 (0.5, 0.5), robot2 (2.0, 0.5)). 지도에 두 로봇 화살표가 뜨면 준비 끝.
+2. "목적지 지정"으로 목표를 드래그한다. 두 로봇에 동시에 보내도 된다.
+3. 가제보에서 로봇을 손으로 옮겼거나 화살표가 실제와 다르면 "초기 위치 설정"으로 다시 찍는다.
 
 | 인자 | 기본 | 뜻 |
 |---|---|---|
 | `gui:=false` | true | Gazebo 화면 없이 |
-| `fleet:=false` | true | 로봇만 띄움(실물 전원만 켠 상태와 같음). Nav2·대시보드는 따로: `multi_robot.launch.py use_sim_time:=true robot1_domain:=25 robot2_domain:=27` |
+| `fleet:=false` | true | 로봇만 띄움(실물 전원만 켠 상태와 같음). Nav2·대시보드는 따로: `multi_robot.launch.py use_sim_time:=true robot1_domain:=25 robot2_domain:=27 robot1_initial_pose:=0.5,0.5,0 robot2_initial_pose:=2.0,0.5,0` |
 | `headless_rendering:=true` | false | 디스플레이 없는 PC에서 라이다·카메라 렌더링 |
 | `robot2_x:= robot2_y:= robot2_yaw:=` | 2.0, 0.5, 0 | 생성 위치 (robot1은 0.5, 0.5, 0) |
 | `world:= map:=` | good_map / good3 | 다른 월드를 쓰면 그 월드 지도도 같이 |

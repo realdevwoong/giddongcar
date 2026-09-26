@@ -1,4 +1,6 @@
 """PC-side Nav2 in two isolated DDS domains, with a shared web dashboard."""
+import copy
+import math
 import os
 from pathlib import Path
 import tempfile
@@ -12,11 +14,25 @@ from launch.events import Shutdown
 from launch.substitutions import LaunchConfiguration
 
 
+def parse_pose(text, name):
+    """'x,y,yaw' -> (x, y, yaw). 비어 있으면 None: 사람이 대시보드에서 찍을 때까지 기다린다."""
+    if not text.strip():
+        return None
+    try:
+        pose = tuple(float(v) for v in text.split(','))
+    except ValueError:
+        pose = ()
+    if len(pose) != 3 or not all(math.isfinite(v) for v in pose):
+        raise RuntimeError(f'{name}은 "x,y,yaw" 형식이어야 합니다: {text!r}')
+    return pose
+
+
 def start(context):
     value = lambda name: LaunchConfiguration(name).perform(context)
     domains = [int(value('robot1_domain')), int(value('robot2_domain'))]
     if domains[0] == domains[1] or any(d < 0 or d > 232 for d in domains):
         raise RuntimeError('Robot domains must be distinct integers between 0 and 232')
+    poses = [parse_pose(value(f'robot{i}_initial_pose'), f'robot{i}_initial_pose') for i in (1, 2)]
     sim = value('use_sim_time').lower()
     if sim not in ('true', 'false'):
         raise RuntimeError('use_sim_time은 true 또는 false여야 합니다')
@@ -49,10 +65,18 @@ def start(context):
     generated = Path(temp.name) / 'nav2_params.yaml'
     generated.write_text(yaml.safe_dump(config, sort_keys=False))
     processes = []
-    for domain in domains:
+    for i, (domain, pose) in enumerate(zip(domains, poses), 1):
+        robot_params = generated
+        if pose:
+            # 시뮬처럼 로봇 위치를 이미 알면 AMCL이 켜지자마자 그 자리로 잡는다. 대시보드에서 다시 찍어도 된다.
+            own = copy.deepcopy(config)
+            own['amcl']['ros__parameters'].update(
+                set_initial_pose=True, initial_pose=dict(x=pose[0], y=pose[1], z=0.0, yaw=pose[2]))
+            robot_params = Path(temp.name) / f'nav2_params_robot{i}.yaml'
+            robot_params.write_text(yaml.safe_dump(own, sort_keys=False))
         processes.append(ExecuteProcess(
             cmd=['ros2', 'launch', 'pinky_navigation', 'bringup_launch.xml',
-                 f'map:={map_path}', f'params_file:={generated}']
+                 f'map:={map_path}', f'params_file:={robot_params}']
                 + (['use_sim_time:=True'] if sim else []),
             additional_env={'ROS_DOMAIN_ID': str(domain)}, output='screen'))
     dashboard = Path(get_package_prefix('pinky_fleet')) / 'lib' / 'pinky_fleet' / 'fleet_dashboard'
@@ -85,5 +109,8 @@ def generate_launch_description():
         DeclareLaunchArgument('port', default_value='8080'),
         DeclareLaunchArgument('use_sim_time', default_value='false',
                               description='true: Gazebo /clock 시간으로 Nav2와 대시보드를 돌린다'),
+        DeclareLaunchArgument('robot1_initial_pose', default_value='',
+                              description='"x,y,yaw" (map 좌표). 비우면 대시보드에서 초기 위치를 찍을 때까지 기다린다'),
+        DeclareLaunchArgument('robot2_initial_pose', default_value=''),
         OpaqueFunction(function=start),
     ])

@@ -155,7 +155,7 @@ ISOLATED = {'ROS_AUTOMATIC_DISCOVERY_RANGE': 'LOCALHOST', 'ROS_STATIC_PEERS': ''
 
 
 class LaunchTests(unittest.TestCase):
-    def start(self, use_sim_time, env=ISOLATED):
+    def start(self, use_sim_time, env=ISOLATED, poses=('', '')):
         spec = importlib.util.spec_from_file_location('multi_robot_launch', LAUNCH_FILE)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -168,7 +168,7 @@ class LaunchTests(unittest.TestCase):
         context.launch_configurations.update(
             map=str(LAUNCH_FILE.parents[1] / 'maps' / 'good3.yaml'), params_file=str(params),
             robot1_domain='15', robot2_domain='17', host='127.0.0.1', port='8080',
-            use_sim_time=use_sim_time)
+            use_sim_time=use_sim_time, robot1_initial_pose=poses[0], robot2_initial_pose=poses[1])
         with patch.dict(os.environ, env):
             actions = module.start(context)
         self.actions = actions  # 살려 둬야 임시 params 파일이 지워지지 않는다
@@ -213,6 +213,29 @@ class LaunchTests(unittest.TestCase):
     def test_rejects_unknown_use_sim_time(self):
         with self.assertRaises(RuntimeError):
             self.start('yes')
+
+    def test_real_mode_shares_one_params_waiting_for_pose(self):
+        cmds, _ = self.start('false', env={})
+        self.assertEqual(cmds[0][5], cmds[1][5])
+
+    def test_known_start_pose_is_set_when_amcl_starts(self):
+        cmds, _ = self.start('true', poses=('0.5,0.5,0', '2.0, 0.5, 1.57'))
+        amcl = [yaml.safe_load(Path(c[5].removeprefix('params_file:=')).read_text())['amcl']['ros__parameters']
+                for c in cmds[:2]]
+        self.assertTrue(amcl[0]['set_initial_pose'] and amcl[1]['set_initial_pose'])
+        self.assertEqual(amcl[0]['initial_pose'], dict(x=0.5, y=0.5, z=0.0, yaw=0.0))
+        self.assertEqual(amcl[1]['initial_pose'], dict(x=2.0, y=0.5, z=0.0, yaw=1.57))
+
+    def test_pose_only_for_one_robot_keeps_the_other_waiting(self):
+        cmds, _ = self.start('true', poses=('0.5,0.5,0', ''))
+        second = yaml.safe_load(Path(cmds[1][5].removeprefix('params_file:=')).read_text())
+        self.assertFalse(second['amcl']['ros__parameters']['set_initial_pose'])
+
+    def test_rejects_malformed_initial_pose(self):
+        for text in ('0.5,0.5', 'a,b,c', 'nan,0,0', '1,2,3,4'):
+            with self.assertRaises(RuntimeError):
+                self.start('true', poses=(text, ''))
+
 
 
 if __name__ == '__main__':
