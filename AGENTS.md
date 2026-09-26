@@ -24,8 +24,9 @@
 |---|---|
 | `pinky_pro/` | colcon 워크스페이스 루트. 빌드는 항상 여기서 한다 |
 | `pinky_pro/src/pinky_*` | 제조사(pinklab) 원본 패키지. 구동(bringup), URDF(description), 시뮬(gz_sim), SLAM·Nav2(navigation), LED·LCD 등 |
-| `pinky_pro/src/pinky_gui/` | 팀 작성. PyQt 지도 뷰. 로봇마다 띄운 웹서버(`/api/state`)를 HTTP로 폴링한다 |
-| `jinho/` | 팀 작성. PC에서 Nav2 2개와 웹 관제 대시보드를 띄운다. 아직 ROS 패키지가 아니다 |
+| `pinky_pro/src/pinky_fleet/` | 팀 작성. **관제 메인.** PC에서 로봇별 Nav2 2개와 웹 대시보드를 띄운다 |
+| `pinky_pro/src/pinky_gui/` | 팀 작성. PyQt 지도 뷰. 지금은 쓰지 않는다 |
+| `jinho/` | `pinky_fleet`의 원본 작업 폴더. 작성자가 정리할 예정이라 수정하지 않는다 |
 | `pinky_pro/chatter_bridge.yaml` | 실물용 `domain_bridge` 설정(도메인 15·17 ↔ 0) |
 
 ## 빌드
@@ -76,7 +77,7 @@ export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST          # 내 PC 안에서만 �
 
 ## 실물 로봇 (참고)
 
-- 로봇1은 `ROS_DOMAIN_ID=15`, 로봇2는 `17`을 쓴다. 로봇에서는 `pinky_bringup`만 켜고 Nav2는 PC에서 돌린다(`jinho/start_fleet.sh`).
+- 로봇1은 `ROS_DOMAIN_ID=15`, 로봇2는 `17`을 쓴다. 로봇에서는 `pinky_bringup`만 켜고 Nav2는 PC에서 돌린다(`ros2 launch pinky_fleet multi_robot.launch.py`, 자세한 내용은 [pinky_fleet/README.md](pinky_pro/src/pinky_fleet/README.md)).
 - 공유기가 DDS 멀티캐스트를 걸러낸다. 그래서 PC와 로봇이 서로 찾으려면 유니캐스트 peer 설정(`ROS_STATIC_PEERS` 등)이 필요하다.
 - ⚠️ `pinky_bringup`에는 속도 명령 타임아웃이 없다. `cmd_vel`이 끊겨도 **마지막 속도로 계속 달린다.** 키보드 조종을 끈 뒤에는 0 속도를 한 번 보낸다.
   ```bash
