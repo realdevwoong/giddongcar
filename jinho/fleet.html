@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pinky Fleet</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#101723;color:#e7edf6;font:15px system-ui,sans-serif}
+header{padding:20px 28px;border-bottom:1px solid #304055;display:flex;align-items:center;gap:20px}h1{margin:0;font-size:24px}header span{color:#aebdd0}
+main{display:grid;grid-template-columns:300px 1fr;min-height:calc(100vh - 73px)}aside{padding:20px;border-right:1px solid #304055}h2{font-size:16px;margin:0 0 12px}
+button,select{font:inherit;color:inherit;background:#253449;border:1px solid #526278;border-radius:7px;padding:10px;cursor:pointer}button:disabled{opacity:.4;cursor:default}
+.robot{display:block;width:100%;text-align:left;margin:10px 0;padding:16px;border-left:5px solid var(--color)}.robot.selected{background:#34445c;outline:1px solid var(--color)}.robot small{display:block;line-height:1.8;color:#bdccdf}.robot strong{display:block;margin-bottom:8px}
+label{display:block;margin:22px 0 8px}select{width:100%}.actions{display:flex;gap:8px;margin-top:12px}.actions button{flex:1}.cancel{background:#60343e}
+p{line-height:1.7;color:#adbbcf;font-size:13px}#message{min-height:60px;color:#f4d18a;white-space:pre-wrap}.maparea{padding:20px;display:flex;flex-direction:column;min-width:0}.bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}#mapInfo{color:#b0c0d5;font-size:13px}
+.canvaswrap{flex:1;position:relative;min-height:420px;background:#182333;border-radius:12px;overflow:hidden}canvas{display:block;width:100%;height:100%;position:absolute;touch-action:none}#empty{position:absolute;top:45%;width:100%;text-align:center;pointer-events:none;color:#b0c0d5}
+@media(max-width:760px){main{grid-template-columns:1fr}aside{border-right:0}.canvaswrap{height:60vh;flex:auto}header span{display:none}}
+</style>
+<header><h1>Pinky Fleet</h1><span>두 로봇 · 하나의 지도</span></header>
+<main><aside><h2>로봇 선택</h2><div id="robots"></div>
+<label for="mode">지도 조작</label><select id="mode"><option value="initialpose">초기 위치 설정</option><option value="goal">목적지 지정</option></select>
+<p>선택한 로봇의 위치에서 드래그하여 방향을 지정하세요. 먼저 두 로봇의 실제 초기 위치를 각각 설정하세요.</p>
+<div class="actions"><button id="cancel" class="cancel">선택 이동 취소</button><button id="cancelAll" class="cancel">전체 이동 취소</button></div>
+<p>이동 취소는 Nav2 목표를 취소합니다. 수동 키보드 조작을 정지시키는 버튼은 아닙니다.</p>
+<div id="message" role="status" aria-live="polite">지도와 로봇 데이터를 기다리는 중입니다.</div>
+</aside><section class="maparea"><div class="bar"><span id="mapInfo">공통 지도 대기</span><button id="fit">지도 맞춤</button></div>
+<div class="canvaswrap"><canvas id="map" aria-label="두 로봇의 위치와 경로 지도"></canvas><div id="empty">지도 수신 대기 중…</div></div>
+<p>파랑: robot1 · 주황: robot2 · 선: 계획 경로 · 위치 단위: m</p></section></main>
+<script>
+const canvas=document.querySelector('#map'), ctx=canvas.getContext('2d');
+const colors={robot1:'#52b7ff',robot2:'#ffaf60'};
+let selected='robot1', states=[], map=null, mapId=null, bitmap=null, scale=1, ox=0, oy=0, drag=null, busy=false, connected=false;
+const message=text=>document.querySelector('#message').textContent=text;
+function fit(){
+  if(!map)return;
+  scale=Math.min((canvas.width-50)/map.width,(canvas.height-50)/map.height);
+  ox=(canvas.width-map.width*scale)/2;oy=(canvas.height-map.height*scale)/2;draw();
+}
+function resize(){const box=canvas.parentElement.getBoundingClientRect();canvas.width=box.width;canvas.height=box.height;fit();draw();}
+new ResizeObserver(resize).observe(canvas.parentElement);
+document.querySelector('#fit').onclick=fit;
+function localWorld(x,y){const a=map.origin.yaw,c=Math.cos(a),s=Math.sin(a);return{x:map.origin.x+c*x-s*y,y:map.origin.y+s*x+c*y};}
+function screenToWorld(p){return localWorld((p.x-ox)/scale*map.resolution,(map.height-(p.y-oy)/scale)*map.resolution);}
+function worldToScreen(p){const dx=p.x-map.origin.x,dy=p.y-map.origin.y,a=map.origin.yaw;return{x:ox+(Math.cos(a)*dx+Math.sin(a)*dy)/map.resolution*scale,y:oy+(map.height-(-Math.sin(a)*dx+Math.cos(a)*dy)/map.resolution)*scale};}
+function arrow(p,heading,color,label){
+  const q=worldToScreen(p),a=heading-map.origin.yaw;
+  ctx.save();ctx.translate(q.x,q.y);ctx.rotate(-a);ctx.fillStyle=color;ctx.strokeStyle='#101723';ctx.lineWidth=2;
+  ctx.beginPath();ctx.moveTo(15,0);ctx.lineTo(-10,-9);ctx.lineTo(-6,0);ctx.lineTo(-10,9);ctx.closePath();ctx.fill();ctx.stroke();ctx.restore();
+  ctx.fillStyle=color;ctx.font='bold 14px system-ui';ctx.fillText(label,q.x+14,q.y-14);
+}
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);if(!map||!bitmap)return;
+  ctx.imageSmoothingEnabled=false;ctx.drawImage(bitmap,ox,oy,map.width*scale,map.height*scale);
+  for(const robot of states){
+    if(!connected||!robot.online||!robot.map_matches)continue;
+    ctx.strokeStyle=colors[robot.id];ctx.lineWidth=2;ctx.beginPath();
+    robot.path.forEach((p,i)=>{const q=worldToScreen(p);i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y)});ctx.stroke();
+    if(robot.pose)arrow(robot.pose,robot.pose.yaw,colors[robot.id],robot.id);
+  }
+  if(drag){const p=screenToWorld(drag.start),q=screenToWorld(drag.end);arrow(p,Math.atan2(q.y-p.y,q.x-p.x),colors[drag.robot],'설정');}
+}
+function installMap(data){
+  map=data.map;mapId=data.id;if(!map)return;
+  bitmap=document.createElement('canvas');bitmap.width=map.width;bitmap.height=map.height;
+  const bctx=bitmap.getContext('2d'),image=bctx.createImageData(map.width,map.height);
+  for(let y=0;y<map.height;y++)for(let x=0;x<map.width;x++){
+    const v=map.data[y*map.width+x],i=((map.height-1-y)*map.width+x)*4,g=v<0?133:Math.round(255*(1-v/100));
+    image.data[i]=image.data[i+1]=image.data[i+2]=g;image.data[i+3]=255;
+  }
+  bctx.putImageData(image,0,0);document.querySelector('#empty').hidden=true;
+  document.querySelector('#mapInfo').textContent=`공통 지도 · ${map.width} × ${map.height} · ${map.resolution} m/셀`;fit();
+}
+for(const id of ['robot1','robot2']){
+  const button=document.createElement('button');button.className='robot';button.style.setProperty('--color',colors[id]);button.id=id;
+  button.onclick=()=>{selected=id;drag=null;renderCards();draw();};document.querySelector('#robots').append(button);
+}
+function renderCards(){
+  for(const id of ['robot1','robot2']){
+    const r=states.find(r=>r.id===id),el=document.getElementById(id);el.classList.toggle('selected',id===selected);el.setAttribute('aria-pressed',id===selected);
+    let status='서버 연결 대기',detail='';
+    if(connected&&r){status=!r.online?'로봇 odom 수신 끊김':!r.map_matches?'공통 지도 대기 / 불일치':!r.pose?'초기 위치 / TF 대기':r.status;
+      detail=r.pose?`x ${r.pose.x.toFixed(2)} · y ${r.pose.y.toFixed(2)} · ${(r.pose.yaw*180/Math.PI).toFixed(0)}°`:'';}
+    el.replaceChildren();const title=document.createElement('strong');title.textContent=`${id} · domain ${r?r.domain:'…'}`;el.append(title);
+    for(const text of [status,detail]){const line=document.createElement('small');line.textContent=text;el.append(line);}
+  }
+  document.querySelector('#cancel').disabled=busy||!connected;
+  document.querySelector('#cancelAll').disabled=busy||!connected;
+}
+async function request(url,options={}){
+  const response=await fetch(url,{...options,signal:AbortSignal.timeout(8000)}),body=await response.json();
+  if(!response.ok)throw Error(body.error||'요청 실패');return body;
+}
+async function command(id,action,body){return request(`/api/robots/${id}/${action}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});}
+async function act(ids,action,body={}){
+  busy=true;renderCards();message('요청 중…');
+  const results=await Promise.all(ids.map(async id=>{try{return `${id}: ${(await command(id,action,body)).message}`;}catch(e){return `${id}: ${e.message}`;}}));
+  message(results.join('\n'));busy=false;renderCards();
+}
+document.querySelector('#cancel').onclick=()=>act([selected],'stop');
+document.querySelector('#cancelAll').onclick=()=>act(['robot1','robot2'],'stop');
+function point(e){const r=canvas.getBoundingClientRect();return{x:(e.clientX-r.left)*canvas.width/r.width,y:(e.clientY-r.top)*canvas.height/r.height};}
+canvas.onpointerdown=e=>{
+  if(!map||busy||!connected||e.button!==0)return;
+  const r=states.find(r=>r.id===selected);if(!r||!r.map_matches){message('선택한 로봇의 공통 지도 수신을 기다리세요.');return;}
+  const p=point(e);if(p.x<ox||p.y<oy||p.x>ox+map.width*scale||p.y>oy+map.height*scale)return;
+  drag={start:p,end:p,robot:selected,mode:document.querySelector('#mode').value};canvas.setPointerCapture(e.pointerId);draw();
+};
+canvas.onpointermove=e=>{if(drag){drag.end=point(e);draw();}};
+canvas.onpointerup=e=>{
+  if(!drag)return;const d=drag;drag=null;
+  const p=screenToWorld(d.start),q=screenToWorld(point(e));draw();
+  // A click without a direction drag keeps the current heading if known.
+  const r=states.find(r=>r.id===d.robot),heading=Math.hypot(q.x-p.x,q.y-p.y)>.02?Math.atan2(q.y-p.y,q.x-p.x):(r?.pose?.yaw||0);
+  act([d.robot],d.mode,{...p,yaw:heading});
+};
+canvas.onpointercancel=()=>{drag=null;draw();};
+async function poll(){
+  try{const data=await request('/api/state');states=data.robots;connected=true;
+    if(data.map_id&&data.map_id!==mapId)installMap(await request('/api/map'));
+  }catch(e){connected=false;drag=null;message('관제 서버 연결 끊김: '+e.message);}
+  renderCards();draw();setTimeout(poll,500);
+}
+renderCards();poll();
+</script>
+</html>

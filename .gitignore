@@ -11,3 +11,4 @@ pinky_pro/log/
 *_ed25519
 credentials.json
 secrets.yaml
+__pycache__
