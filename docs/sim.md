@@ -69,7 +69,10 @@ ros2 daemon stop
 ROS_DOMAIN_ID=25 ros2 topic echo /scan --once
 ROS_DOMAIN_ID=27 ros2 run tf2_ros tf2_echo odom base_footprint
 ROS_DOMAIN_ID=25 ros2 run teleop_twist_keyboard teleop_twist_keyboard   # robot1만 움직이면 정상
+ROS_DOMAIN_ID=25 ros2 run rqt_image_view rqt_image_view /camera/image_raw   # robot1 카메라
 ```
+
+카메라 브리지 때문에 가제보 CPU가 늘었다(공장 월드 기준 55% → 132%). 해상도를 낮추는 것은 다음 단계.
 
 `--no-daemon`은 발견이 덜 된 채 결과를 낼 때가 있다. 위처럼 daemon을 껐다 켜고 몇 초 뒤에 본다.
 

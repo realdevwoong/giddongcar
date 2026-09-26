@@ -28,6 +28,12 @@
 
 # joint_states는 일부러 뺐다. Gazebo가 초당 900번 넘게 보내 CPU만 먹고, Nav2에는 필요 없다(바퀴 회전 표시용).
 
+- ros_topic_name: /camera/image_raw   # 로봇 앞 카메라 (raw 1280x720 30Hz). 압축·해상도 낮추기는 다음 단계
+  gz_topic_name: camera/image_raw
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+
 - ros_topic_name: /cmd_vel
   gz_topic_name: cmd_vel
   ros_type_name: geometry_msgs/msg/Twist
