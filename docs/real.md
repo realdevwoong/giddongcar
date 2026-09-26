@@ -16,6 +16,10 @@ Nav2는 로봇이 아니라 PC에서 돈다. 로봇에서는 bringup만 켠다.
 # 로봇에서 (ssh). 로봇 bashrc에 도메인이 이미 설정돼 있으면 앞부분 생략
 ROS_DOMAIN_ID=15 ros2 launch pinky_bringup bringup_robot.launch.xml     # 로봇2는 17
 
+# 로봇에서 (선택) 상태 램프: 대시보드가 이동 중 파랑 깜빡임 / 도착 초록 / 실패 빨강 깜빡임으로 바꾼다
+ROS_DOMAIN_ID=15 ros2 run pinky_lamp_control main_node                   # 로봇2는 17. 없으면 대시보드 카드에 "램프 노드 없음"
+# ↑ 학원에서 처음 확인할 것: 램프 드라이버(커널 모듈, pinky_lamp_control/README.md)가 로봇 이미지에 설정돼 있는지, 일반 사용자로 켜지는지
+
 # PC에서
 source ~/giddongcar/pinky_pro/install/setup.bash
 ROS_DOMAIN_ID=15 ros2 topic echo /scan sensor_msgs/msg/LaserScan --once  # 연결 확인 (17도)

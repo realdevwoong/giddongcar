@@ -21,6 +21,7 @@ from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy, qos_profi
 from nav_msgs.msg import OccupancyGrid, Path as NavPath, Odometry
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav2_msgs.action import NavigateToPose
+from pinky_interfaces.srv import SetLamp
 from action_msgs.msg import GoalStatusArray
 from action_msgs.srv import CancelGoal
 from tf2_ros import Buffer, TransformListener
@@ -40,6 +41,17 @@ NAV_ERRORS = {101: '경로 추종기 설정 오류', 102: '위치 변환(TF) 실
               107: '경로 추종 시간 초과', 201: '경로 계획기 설정 오류', 202: '위치 변환(TF) 실패',
               203: '출발 위치가 지도 밖', 204: '목적지가 지도 밖', 205: '출발 위치가 장애물 위',
               206: '목적지가 장애물 위', 207: '경로 계획 시간 초과', 208: '갈 수 있는 경로 없음'}
+
+
+# 목표 상태 → 로봇 램프 (mode, (r, g, b), time ms, 화면 글자). 실물 pinky_lamp_control과 시뮬 sim_lamp가 같은 set_lamp로 받는다.
+# mode: 1 켜기, 2 깜빡임, 3 숨쉬기
+LAMP = {'idle': (3, (1.0, 1.0, 1.0), 1000, '흰색 숨쉬기'),
+        'accepted': (2, (0.0, 0.4, 1.0), 500, '파랑 깜빡임'),
+        'executing': (2, (0.0, 0.4, 1.0), 500, '파랑 깜빡임'),
+        'canceling': (1, (1.0, 0.7, 0.0), 0, '노랑'),
+        'canceled': (1, (1.0, 0.7, 0.0), 0, '노랑'),
+        'succeeded': (1, (0.0, 1.0, 0.2), 0, '초록'),
+        'aborted': (2, (1.0, 0.0, 0.0), 250, '빨강 빠른 깜빡임')}
 
 
 def seconds(duration):
@@ -87,6 +99,8 @@ class Robot(Node):
         # 목적지 좌표와 실패 이유는 대시보드가 보낸 목표만 안다.
         self.goal = dict(id=None, code=0, feedback=None)
         self.targets, self.errors = {}, {}
+        # 로봇 램프: 마지막으로 보낸 상태와 결과(ok None=보내는 중, False=램프 노드 없음/실패)
+        self.lamp_state, self.lamp = None, None
         self.buffer = Buffer(node=self)
         self.listener = TransformListener(self.buffer, self)
         transient = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -100,7 +114,9 @@ class Robot(Node):
         self.initial = self.create_publisher(PoseWithCovarianceStamped, 'initialpose', 10)
         self.navigator = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self.cancel = self.create_client(CancelGoal, 'navigate_to_pose/_action/cancel_goal')
+        self.lamp_client = self.create_client(SetLamp, 'set_lamp')
         self.create_timer(0.1, self.update_pose)
+        self.create_timer(2.0, self.retry_lamp)
         self.ros_executor = SingleThreadedExecutor(context=self.ros_context)
         self.ros_executor.add_node(self)
         self.thread = threading.Thread(target=self.spin, daemon=True)
@@ -143,6 +159,32 @@ class Robot(Node):
                 self.goal = dict(id=goal_id, code=latest.status, feedback=None)
             else:
                 self.goal['code'] = latest.status
+        state = NAV_STATES.get(latest.status, ('idle',))[0]
+        if state != self.lamp_state:
+            self.set_lamp(state)
+
+    def set_lamp(self, state):
+        """로봇 램프를 상태 색으로. 기다리지 않는다(램프 때문에 관제가 멈추면 안 된다)."""
+        mode, (r, g, b), period, label = LAMP[state]
+        with self.lock:
+            self.lamp_state = state
+            if not self.lamp_client.service_is_ready():
+                self.lamp = dict(label=label, ok=False)  # 램프 노드가 없다. retry_lamp가 다시 시도한다
+                return
+            self.lamp = dict(label=label, ok=None)
+        request = SetLamp.Request(mode=mode, time=period)
+        request.color.r, request.color.g, request.color.b, request.color.a = r, g, b, 1.0
+
+        def done(future):
+            with self.lock:
+                if self.lamp_state == state:
+                    self.lamp = dict(label=label, ok=bool(future.exception() is None and future.result().result))
+        self.lamp_client.call_async(request).add_done_callback(done)
+
+    def retry_lamp(self):
+        # 로봇 램프 노드가 대시보드보다 늦게 켜졌거나 다시 켜졌을 때
+        if self.lamp_state and self.lamp and self.lamp['ok'] is False and self.lamp_client.service_is_ready():
+            self.set_lamp(self.lamp_state)
 
     def on_feedback(self, msg):
         fb = msg.feedback
@@ -185,7 +227,7 @@ class Robot(Node):
                        error=self.errors.get(goal_id) if state == 'aborted' else None)
             return dict(id=self.robot_name, domain=self.domain, online=online,
                         pose=self.pose if online else None, map_id=self.map_id,
-                        path=self.path if online else [], status=label, nav=nav,
+                        path=self.path if online else [], status=label, nav=nav, lamp=self.lamp,
                         nav_ready=self.navigator.server_is_ready())
 
     def command(self, action, body):

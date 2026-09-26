@@ -10,7 +10,7 @@ import xacro
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (AppendEnvironmentVariable, DeclareLaunchArgument, GroupAction,
-                            IncludeLaunchDescription, SetEnvironmentVariable,
+                            IncludeLaunchDescription, OpaqueFunction, SetEnvironmentVariable,
                             UnsetEnvironmentVariable)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -28,7 +28,23 @@ def gazebo_urdf(robot):
                               mappings={'is_sim': 'true', 'cam_tilt_deg': '0'}).toxml()
     # 제조사 xacro의 namespace 인자는 프레임 이름까지 바꾸고 센서를 떨어뜨리므로 쓰지 않는다.
     # 대신 Gazebo 토픽 태그만 /<robot>/ 아래로 옮겨 두 로봇이 cmd_vel·scan·tf를 공유하지 않게 한다.
-    return re.sub(r'<(topic|odom_topic|tf_topic)>/?', rf'<\1>/{robot}/', urdf)
+    urdf = re.sub(r'<(topic|odom_topic|tf_topic)>/?', rf'<\1>/{robot}/', urdf)
+    # 제조사 램프 플러그인은 초록 숨쉬기만 반복해 우리 색을 덮어쓴다. 램프는 sim_lamp가 맡는다.
+    return re.sub(r'<plugin[^>]*gz-sim-lamp-control-system.*?</plugin>', '', urdf, flags=re.S)
+
+
+def material_color_topic(world_file):
+    # 가제보의 색 바꾸기 토픽은 월드 이름을 포함한다. 월드 이름은 월드 파일에서 읽는다.
+    name = re.search(r'<world\s+name="([^"]+)"', Path(world_file).read_text()).group(1)
+    return f'/world/{name}/material_color'
+
+
+def lamp_bridge(context):
+    # 램프 색 명령(ROS lamp_color) → 가제보 material_color
+    topic = material_color_topic(LaunchConfiguration('world').perform(context))
+    return [Node(package='ros_gz_bridge', executable='parameter_bridge', name='lamp_bridge', output='screen',
+                 arguments=[f'{topic}@ros_gz_interfaces/msg/MaterialColor]gz.msgs.MaterialColor'],
+                 remappings=[(topic, 'lamp_color')])]
 
 
 def robot(name):
@@ -45,6 +61,9 @@ def robot(name):
         Node(package='ros_gz_bridge', executable='parameter_bridge', namespace=name, output='screen',
              parameters=[{'config_file': str(FLEET / 'params/sim_bridge.yaml'),
                           'expand_gz_topic_names': True}]),
+        # 실물 pinky_lamp_control 대신: 같은 set_lamp 서비스를 받아 가제보 램프를 칠한다
+        Node(package='pinky_fleet', executable='sim_lamp', parameters=[{'robot': name}], output='screen'),
+        OpaqueFunction(function=lamp_bridge),
     ])
 
 

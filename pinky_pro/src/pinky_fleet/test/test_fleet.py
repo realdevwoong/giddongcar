@@ -82,12 +82,41 @@ class FleetTests(unittest.TestCase):
         self.assertIsNone(result['pose'])
         self.assertEqual(result['path'], [])
 
-    def nav_robot(self):
+    def nav_robot(self, lamp_ready=False):
         # DDS 없이 상태 처리 코드만 돌리는 가짜 로봇
-        return SimpleNamespace(lock=threading.RLock(), goal=dict(id=None, code=0, feedback=None),
-                               targets={}, errors={}, last_odom=time.monotonic(), robot_name='robot1',
-                               domain=25, pose={'x': 0}, map_id='same', path=[],
-                               navigator=SimpleNamespace(server_is_ready=lambda: True))
+        robot = SimpleNamespace(lock=threading.RLock(), goal=dict(id=None, code=0, feedback=None),
+                                targets={}, errors={}, last_odom=time.monotonic(), robot_name='robot1',
+                                domain=25, pose={'x': 0}, map_id='same', path=[],
+                                navigator=SimpleNamespace(server_is_ready=lambda: True),
+                                lamp_state=None, lamp=None, lamp_client=Mock())
+        robot.lamp_client.service_is_ready.return_value = lamp_ready
+        future = Mock()
+        future.exception.return_value = None
+        future.result.return_value = SimpleNamespace(result=True)
+        future.add_done_callback.side_effect = lambda callback: callback(future)
+        robot.lamp_client.call_async.return_value = future
+        robot.set_lamp = lambda state: Robot.set_lamp(robot, state)
+        return robot
+
+    def test_lamp_follows_goal_state_once_per_change(self):
+        robot = self.nav_robot(lamp_ready=True)
+        Robot.on_status(robot, self.status((1, GoalStatus.STATUS_EXECUTING, 1)))
+        Robot.on_status(robot, self.status((1, GoalStatus.STATUS_EXECUTING, 1)))  # 같은 상태면 다시 안 보낸다
+        Robot.on_status(robot, self.status((1, GoalStatus.STATUS_SUCCEEDED, 1)))
+        sent = [c.args[0] for c in robot.lamp_client.call_async.call_args_list]
+        self.assertEqual([(r.mode, r.time) for r in sent], [(2, 500), (1, 0)])
+        self.assertEqual((sent[0].color.b, sent[1].color.g), (1.0, 1.0))  # 이동 중 파랑, 도착 초록
+        self.assertEqual(Robot.snapshot(robot)['lamp'], dict(label='초록', ok=True))
+
+    def test_missing_lamp_node_is_shown_and_retried(self):
+        robot = self.nav_robot(lamp_ready=False)
+        Robot.on_status(robot, self.status((1, GoalStatus.STATUS_ABORTED, 1)))
+        self.assertEqual(Robot.snapshot(robot)['lamp'], dict(label='빨강 빠른 깜빡임', ok=False))
+        robot.lamp_client.call_async.assert_not_called()
+        robot.lamp_client.service_is_ready.return_value = True  # 램프 노드가 늦게 켜짐
+        Robot.retry_lamp(robot)
+        self.assertEqual(robot.lamp_client.call_async.call_args.args[0].mode, 2)
+        self.assertTrue(Robot.snapshot(robot)['lamp']['ok'])
 
     @staticmethod
     def status(*goals):
@@ -204,6 +233,42 @@ class FleetTests(unittest.TestCase):
             self.assertTrue(robot.get_clock().ros_time_is_active)
         finally:
             robot.close()
+
+
+class SimLampTests(unittest.TestCase):
+    def test_modes_match_real_lamp_rules(self):
+        from pinky_fleet.sim_lamp import OFF, lamp_color
+        blue = (0.0, 0.4, 1.0)
+        self.assertEqual(lamp_color(0, blue, 500, 1.0), OFF)
+        self.assertEqual(lamp_color(1, blue, 0, 7.0), blue)
+        self.assertEqual([lamp_color(2, blue, 500, t) for t in (0.1, 0.6, 1.1)], [blue, OFF, blue])
+        self.assertEqual(lamp_color(3, (1.0, 1.0, 1.0), 1000, 0.5), (0.5, 0.5, 0.5))  # 숨쉬기 중간
+        self.assertEqual(lamp_color(3, (1.0, 1.0, 1.0), 1000, 1.0), (1.0, 1.0, 1.0))
+
+
+class SimLaunchTests(unittest.TestCase):
+    def load(self):
+        path = Path(__file__).resolve().parents[1] / 'launch' / 'sim.launch.py'
+        spec = importlib.util.spec_from_file_location('sim_launch', path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_vendor_lamp_plugin_removed_and_topics_moved(self):
+        urdf = self.load().gazebo_urdf('robot2')
+        self.assertNotIn('gz-sim-lamp-control-system', urdf)
+        self.assertIn('<topic>/robot2/', urdf)
+
+    def test_lamp_topic_uses_world_name_from_file(self):
+        module = self.load()
+        with tempfile.NamedTemporaryFile('w', suffix='.world') as world:
+            world.write('<sdf version="1.8">\n  <world name="good_map">\n  </world>\n</sdf>')
+            world.flush()
+            self.assertEqual(module.material_color_topic(world.name), '/world/good_map/material_color')
+        # 기본 월드 두 개 모두 이름을 읽을 수 있어야 한다
+        worlds = Path(__file__).resolve().parents[1] / 'worlds'
+        self.assertEqual(module.material_color_topic(worlds / 'pinky_factory.world'),
+                         '/world/pinky_factory/material_color')
 
 
 LAUNCH_FILE = Path(__file__).resolve().parents[1] / 'launch' / 'multi_robot.launch.py'
