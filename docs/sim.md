@@ -18,21 +18,33 @@ ros2 launch pinky_fleet sim.launch.py
 
 브라우저에서 http://localhost:8080 을 연다.
 
-1. robot1 선택 → "초기 위치 설정" → 지도의 (0, 0)을 누르고 +x 방향(오른쪽)으로 드래그. 로봇이 생성되는 위치라 정확히 맞다.
-2. robot2도 같은 방법으로 (0, -1.0).
+1. robot1 선택 → "초기 위치 설정" → 지도의 (0.5, 0.5)를 누르고 +x 방향(오른쪽)으로 드래그. 로봇이 생성되는 위치라 정확히 맞다.
+2. robot2도 같은 방법으로 (2.0, 0.5).
 3. "목적지 지정"으로 목표를 드래그한다. 두 로봇에 동시에 보내도 된다.
 
 | 인자 | 기본 | 뜻 |
 |---|---|---|
 | `gui:=false` | true | Gazebo 화면 없이 |
-| `fleet:=false` | true | 로봇만 띄움(실물 전원만 켠 상태와 같음). Nav2·대시보드는 따로: `multi_robot.launch.py use_sim_time:=true robot1_domain:=25 robot2_domain:=27 map:=<my_map.yaml 경로>` |
+| `fleet:=false` | true | 로봇만 띄움(실물 전원만 켠 상태와 같음). Nav2·대시보드는 따로: `multi_robot.launch.py use_sim_time:=true robot1_domain:=25 robot2_domain:=27` |
 | `headless_rendering:=true` | false | 디스플레이 없는 PC에서 라이다·카메라 렌더링 |
-| `robot2_x:= robot2_y:= robot2_yaw:=` | 0, -1.0, 0 | 생성 위치 (robot1도 같은 식) |
-| `world:= map:=` | pinky_factory / my_map | 다른 월드를 쓰면 그 월드 지도도 같이 |
+| `robot2_x:= robot2_y:= robot2_yaw:=` | 2.0, 0.5, 0 | 생성 위치 (robot1은 0.5, 0.5, 0) |
+| `world:= map:=` | good_map / good3 | 다른 월드를 쓰면 그 월드 지도도 같이 |
 
-가제보 월드 `pinky_factory`의 지도는 `pinky_navigation/map/my_map.yaml`이다. `good3`는 실제 방 지도라 시뮬에 쓰면 위치가 맞지 않는다.
+## 월드
 
-기본 월드는 제조사 파일의 복사본 `pinky_fleet/worlds/pinky_factory.world`다. 물리 step만 1ms → 4ms로 바꿨다. 가제보가 step마다 `/clock`을 보내는데, 초당 1000번이면 시계를 받는 파이썬 노드 하나가 CPU 40%를 먹는다. 로봇이 느려서(초속 0.1~0.3 m) 4ms면 충분하다.
+기본 월드 `pinky_fleet/worlds/good_map.world`는 **실제 방 지도 `good3`의 검은 칸을 그대로 벽으로 세운 것**이다. 시뮬과 실물이 같은 지도(`maps/good3.yaml`)를 쓰므로 학원에서는 초기 위치만 다시 찍으면 된다.
+
+- 왼쪽 방과 오른쪽 방은 **위쪽 통로(x≈1.6, y 0.9~1.2, 폭 0.35 m) 하나로만** 이어진다. 한 번에 한 대만 지나간다. 오른쪽 방은 칸막이(x≈2.33, y 0.63 위쪽)로 나뉘어 아래쪽으로 돌아간다. 왼쪽 방 가운데 장애물은 책상 윤곽이 벽으로 세워진 것이다.
+- 측정(2026-09-26): 한 대씩은 통로를 지나간다(왼→오 18초). 오→왼은 한 번 "collision ahead"로 실패했다가 재시도에 성공했다. **두 대가 반대 방향으로 동시에 들어가면 통로에서 서로 막혀 둘 다 실패한다.** 교통 정리가 필요한 이유다([structure.md](structure.md) 2단계).
+- 원본은 `pinky_gz_sim/worlds/good_map.world`(`inwoong/map_to_world.py`로 생성). 이 복사본은 물리 step만 1ms → 4ms로 바꿨다. 가제보가 step마다 `/clock`을 보내는데, 초당 1000번이면 시계를 받는 파이썬 노드 하나가 CPU 40%를 먹는다. 로봇이 느려서(초속 0.1~0.3 m) 4ms면 충분하다.
+- 지도를 새로 만들면(SLAM) 월드도 다시 만든다: `python3 inwoong/map_to_world.py <지도.yaml> -o <월드>` 뒤 물리 step을 4ms로 고친다.
+- 제조사 공장 월드(선반·카메라에 볼거리가 있다)도 쓸 수 있다. 지도가 다르니 같이 넘긴다.
+  ```bash
+  ros2 launch pinky_fleet sim.launch.py \
+    world:=$(ros2 pkg prefix pinky_fleet)/share/pinky_fleet/worlds/pinky_factory.world \
+    map:=$(ros2 pkg prefix pinky_navigation)/share/pinky_navigation/map/my_map.yaml \
+    robot1_x:=0 robot1_y:=0 robot2_x:=0 robot2_y:=-1.0
+  ```
 
 ## 격리: 실물 로봇과 절대 섞이지 않게
 
@@ -44,6 +56,8 @@ ros2 launch pinky_fleet sim.launch.py
 `multi_robot.launch.py use_sim_time:=true`를 직접 띄울 때는 위 설정이 안 돼 있으면 실행을 거부한다.
 
 시뮬 도메인을 굳이 15/17로 바꾸지 말 것. LOCALHOST만으로는 실물 로봇이 이 PC를 peer로 알고 먼저 찾아오는 경우를 못 막는다.
+
+⚠️ `inwoong/run_fleet_sim.sh`는 도메인 15/17을 격리 없이 쓴다(포트도 8080). 로봇 공유기에 붙은 PC나 `ROS_STATIC_PEERS`가 설정된 셸에서는 돌리지 않는다. 로봇 2대 시뮬은 `sim.launch.py`를 쓴다.
 
 ## 디버그 터미널
 

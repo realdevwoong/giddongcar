@@ -20,7 +20,6 @@ from launch_ros.actions import Node
 DESCRIPTION = Path(get_package_share_directory('pinky_description'))
 GZ_SIM = Path(get_package_share_directory('pinky_gz_sim'))
 ROS_GZ_SIM = Path(get_package_share_directory('ros_gz_sim'))
-NAVIGATION = Path(get_package_share_directory('pinky_navigation'))
 FLEET = Path(get_package_share_directory('pinky_fleet'))
 
 
@@ -52,22 +51,23 @@ def robot(name):
 def generate_launch_description():
     config = LaunchConfiguration
     return LaunchDescription([
-        DeclareLaunchArgument('world', default_value=str(FLEET / 'worlds/pinky_factory.world'),
-                              description='제조사 월드 복사본(물리 step 4ms). 제조사 원본은 pinky_gz_sim/worlds'),
-        DeclareLaunchArgument('map', default_value=str(NAVIGATION / 'map/my_map.yaml'),
-                              description='world에 맞는 지도. 기본 월드 pinky_factory는 my_map'),
+        DeclareLaunchArgument('world', default_value=str(FLEET / 'worlds/good_map.world'),
+                              description='실제 방(good3 지도)을 벽으로 세운 월드(물리 step 4ms)'),
+        DeclareLaunchArgument('map', default_value=str(FLEET / 'maps/good3.yaml'),
+                              description='world에 맞는 지도. 월드를 바꾸면 지도도 같이 바꾼다'),
         DeclareLaunchArgument('gui', default_value='true', description='Gazebo 화면 표시'),
         DeclareLaunchArgument('headless_rendering', default_value='false',
                               description='화면 없는 PC에서 라이다·카메라 렌더링(EGL)'),
         DeclareLaunchArgument('fleet', default_value='true',
                               description='Nav2 두 개와 웹 대시보드(multi_robot.launch.py)도 실행'),
+        # 생성 위치: good3 지도의 빈 곳(가장 가까운 벽까지 robot1 0.18 m, robot2 0.36 m). robot1은 왼쪽 방, robot2는 오른쪽 방
         DeclareLaunchArgument('robot1_domain', default_value='25'),
-        DeclareLaunchArgument('robot1_x', default_value='0.0'),
-        DeclareLaunchArgument('robot1_y', default_value='0.0'),
+        DeclareLaunchArgument('robot1_x', default_value='0.5'),
+        DeclareLaunchArgument('robot1_y', default_value='0.5'),
         DeclareLaunchArgument('robot1_yaw', default_value='0.0'),
         DeclareLaunchArgument('robot2_domain', default_value='27'),
-        DeclareLaunchArgument('robot2_x', default_value='0.0'),
-        DeclareLaunchArgument('robot2_y', default_value='-1.0'),
+        DeclareLaunchArgument('robot2_x', default_value='2.0'),
+        DeclareLaunchArgument('robot2_y', default_value='0.5'),
         DeclareLaunchArgument('robot2_yaw', default_value='0.0'),
 
         # 시뮬은 이 PC 안에서만 통신한다. 실물용 DDS 설정(peer 목록, 프로파일, 디스커버리 서버)은 자식에게 물려주지 않는다.
