@@ -31,6 +31,27 @@ def yaw(q):
     return math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
 
 
+# action_msgs/GoalStatus 번호 → (상태 키, 화면 글자). 0(UNKNOWN)이거나 목표가 없으면 대기.
+NAV_STATES = {1: ('accepted', '목표 수락'), 2: ('executing', '이동 중'), 3: ('canceling', '취소 중'),
+              4: ('succeeded', '도착'), 5: ('canceled', '취소됨'), 6: ('aborted', '이동 실패')}
+# NavigateToPose 결과 error_code (nav2_msgs FollowPath 1xx, ComputePathToPose 2xx)
+NAV_ERRORS = {101: '경로 추종기 설정 오류', 102: '위치 변환(TF) 실패', 103: '경로가 잘못됨',
+              104: '시간 한도 초과', 105: '진전 없음 — 막혀서 못 움직임', 106: '앞에 장애물 — 안전한 속도를 못 찾음',
+              107: '경로 추종 시간 초과', 201: '경로 계획기 설정 오류', 202: '위치 변환(TF) 실패',
+              203: '출발 위치가 지도 밖', 204: '목적지가 지도 밖', 205: '출발 위치가 장애물 위',
+              206: '목적지가 장애물 위', 207: '경로 계획 시간 초과', 208: '갈 수 있는 경로 없음'}
+
+
+def seconds(duration):
+    return round(duration.sec + duration.nanosec / 1e9, 1)
+
+
+def remember(table, key, value, keep=20):
+    table[key] = value
+    while len(table) > keep:
+        table.pop(next(iter(table)))
+
+
 def pose_input(body):
     if not isinstance(body, dict):
         raise ValueError('Expected a JSON object')
@@ -62,7 +83,10 @@ class Robot(Node):
         self.map_data, self.map_id = None, None
         self.path, self.pose = [], None
         self.last_odom = 0
-        self.status = '대기'
+        # 가장 최근 Nav2 목표. 누가 보냈든(대시보드, RViz) 상태와 진행은 보이고,
+        # 목적지 좌표와 실패 이유는 대시보드가 보낸 목표만 안다.
+        self.goal = dict(id=None, code=0, feedback=None)
+        self.targets, self.errors = {}, {}
         self.buffer = Buffer(node=self)
         self.listener = TransformListener(self.buffer, self)
         transient = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -71,6 +95,8 @@ class Robot(Node):
         self.create_subscription(NavPath, 'plan', self.on_path, 10)
         self.create_subscription(Odometry, 'odom', self.on_odom, qos_profile_sensor_data)
         self.create_subscription(GoalStatusArray, 'navigate_to_pose/_action/status', self.on_status, transient)
+        self.create_subscription(NavigateToPose.Impl.FeedbackMessage, 'navigate_to_pose/_action/feedback',
+                                 self.on_feedback, 10)
         self.initial = self.create_publisher(PoseWithCovarianceStamped, 'initialpose', 10)
         self.navigator = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self.cancel = self.create_client(CancelGoal, 'navigate_to_pose/_action/cancel_goal')
@@ -111,9 +137,30 @@ class Robot(Node):
         if not msg.status_list:
             return
         latest = max(msg.status_list, key=lambda s: (s.goal_info.stamp.sec, s.goal_info.stamp.nanosec))
-        labels = {1: '목표 수락', 2: '이동 중', 3: '취소 중', 4: '도착', 5: '취소됨', 6: '이동 실패'}
+        goal_id = bytes(latest.goal_info.goal_id.uuid).hex()
         with self.lock:
-            self.status = labels.get(latest.status, '대기')
+            if goal_id != self.goal['id']:
+                self.goal = dict(id=goal_id, code=latest.status, feedback=None)
+            else:
+                self.goal['code'] = latest.status
+
+    def on_feedback(self, msg):
+        fb = msg.feedback
+        with self.lock:
+            if bytes(msg.goal_id.uuid).hex() == self.goal['id']:
+                self.goal['feedback'] = dict(
+                    distance=round(fb.distance_remaining, 2), remaining=seconds(fb.estimated_time_remaining),
+                    elapsed=seconds(fb.navigation_time), recoveries=fb.number_of_recoveries)
+
+    def on_result(self, goal_id, future):
+        try:
+            result = future.result().result
+        except Exception:
+            return
+        if result.error_code:
+            reason = NAV_ERRORS.get(result.error_code) or result.error_msg or '알 수 없는 오류'
+            with self.lock:
+                remember(self.errors, goal_id, f'{reason} (코드 {result.error_code})')
 
     def update_pose(self):
         pose = None
@@ -131,9 +178,14 @@ class Robot(Node):
     def snapshot(self):
         with self.lock:
             online = time.monotonic() - self.last_odom < 2
+            goal_id = self.goal['id']
+            state, label = NAV_STATES.get(self.goal['code'], ('idle', '대기'))
+            nav = dict(id=goal_id and goal_id[:8], state=state, label=label,
+                       target=self.targets.get(goal_id), feedback=self.goal['feedback'],
+                       error=self.errors.get(goal_id) if state == 'aborted' else None)
             return dict(id=self.robot_name, domain=self.domain, online=online,
                         pose=self.pose if online else None, map_id=self.map_id,
-                        path=self.path if online else [], status=self.status,
+                        path=self.path if online else [], status=label, nav=nav,
                         nav_ready=self.navigator.server_is_ready())
 
     def command(self, action, body):
@@ -174,6 +226,10 @@ class Robot(Node):
             handle = await_future(self.navigator.send_goal_async(goal))
             if not handle.accepted:
                 raise ValueError('Nav2가 목적지를 거부했습니다.')
+            goal_id = bytes(handle.goal_id.uuid).hex()
+            with self.lock:
+                remember(self.targets, goal_id, dict(x=x, y=y, yaw=heading))
+            handle.get_result_async().add_done_callback(lambda future: self.on_result(goal_id, future))
             return '목적지 수락 — 이동 상태를 확인하세요.'
 
     def close(self):

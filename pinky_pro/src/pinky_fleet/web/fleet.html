@@ -11,6 +11,12 @@ button,select{font:inherit;color:inherit;background:#253449;border:1px solid #52
 label{display:block;margin:22px 0 8px}select{width:100%}.actions{display:flex;gap:8px;margin-top:12px}.actions button{flex:1}.cancel{background:#60343e}
 p{line-height:1.7;color:#adbbcf;font-size:13px}#message{min-height:60px;color:#f4d18a;white-space:pre-wrap}.maparea{padding:20px;display:flex;flex-direction:column;min-width:0}.bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}#mapInfo{color:#b0c0d5;font-size:13px}
 .canvaswrap{flex:1;position:relative;min-height:420px;background:#182333;border-radius:12px;overflow:hidden}canvas{display:block;width:100%;height:100%;position:absolute;touch-action:none}#empty{position:absolute;top:45%;width:100%;text-align:center;pointer-events:none;color:#b0c0d5}
+.badge{display:inline-block;margin:0 0 6px;padding:3px 10px;border-radius:99px;font-size:13px;font-weight:600;background:#3a4659}
+.badge.accepted,.badge.executing{background:#1d5d96}.badge.succeeded{background:#1e7b4c}.badge.aborted{background:#9a2f3d}.badge.canceled,.badge.canceling{background:#80611d}.badge.offline{background:#4a4f58}
+.badge.executing::before{content:'';display:inline-block;width:8px;height:8px;margin-right:6px;border-radius:50%;background:#9fd3ff;animation:blink 1s infinite}
+@keyframes blink{50%{opacity:.2}}@media(prefers-reduced-motion:reduce){.badge.executing::before{animation:none}}
+#events{list-style:none;padding:0;margin:0;font-size:13px;line-height:1.8;max-height:200px;overflow:auto}#events li{border-left:3px solid #3a4659;padding-left:8px}#events time{color:#8797ab;margin-right:6px}
+#events .succeeded{border-color:#2fae6d}#events .aborted{border-color:#d9485c}#events .canceled,#events .canceling{border-color:#c79a2e}#events .accepted,#events .executing{border-color:#3f8fd6}
 @media(max-width:760px){main{grid-template-columns:1fr}aside{border-right:0}.canvaswrap{height:60vh;flex:auto}header span{display:none}}
 </style>
 <header><h1>Pinky Fleet</h1><span>두 로봇 · 하나의 지도</span></header>
@@ -20,9 +26,10 @@ p{line-height:1.7;color:#adbbcf;font-size:13px}#message{min-height:60px;color:#f
 <div class="actions"><button id="cancel" class="cancel">선택 이동 취소</button><button id="cancelAll" class="cancel">전체 이동 취소</button></div>
 <p>이동 취소는 Nav2 목표를 취소합니다. 수동 키보드 조작을 정지시키는 버튼은 아닙니다.</p>
 <div id="message" role="status" aria-live="polite">지도와 로봇 데이터를 기다리는 중입니다.</div>
+<h2>이벤트</h2><ul id="events"><li>아직 없음</li></ul>
 </aside><section class="maparea"><div class="bar"><span id="mapInfo">공통 지도 대기</span><button id="fit">지도 맞춤</button></div>
 <div class="canvaswrap"><canvas id="map" aria-label="두 로봇의 위치와 경로 지도"></canvas><div id="empty">지도 수신 대기 중…</div></div>
-<p>파랑: robot1 · 주황: robot2 · 선: 계획 경로 · 위치 단위: m</p></section></main>
+<p>파랑: robot1 · 주황: robot2 · 선: 계획 경로 · 깃발: 목적지 · 위치 단위: m</p></section></main>
 <script>
 const canvas=document.querySelector('#map'), ctx=canvas.getContext('2d');
 const colors={robot1:'#52b7ff',robot2:'#ffaf60'};
@@ -45,11 +52,19 @@ function arrow(p,heading,color,label){
   ctx.beginPath();ctx.moveTo(15,0);ctx.lineTo(-10,-9);ctx.lineTo(-6,0);ctx.lineTo(-10,9);ctx.closePath();ctx.fill();ctx.stroke();ctx.restore();
   ctx.fillStyle=color;ctx.font='bold 14px system-ui';ctx.fillText(label,q.x+14,q.y-14);
 }
+function flag(p,color){
+  const q=worldToScreen(p);ctx.save();ctx.strokeStyle=ctx.fillStyle=color;ctx.lineWidth=2;
+  ctx.beginPath();ctx.moveTo(q.x,q.y);ctx.lineTo(q.x,q.y-22);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(q.x,q.y-22);ctx.lineTo(q.x+14,q.y-17);ctx.lineTo(q.x,q.y-12);ctx.closePath();ctx.fill();
+  ctx.beginPath();ctx.arc(q.x,q.y,3,0,Math.PI*2);ctx.fill();ctx.restore();
+}
+const ACTIVE=['accepted','executing','canceling'];
 function draw(){
   ctx.clearRect(0,0,canvas.width,canvas.height);if(!map||!bitmap)return;
   ctx.imageSmoothingEnabled=false;ctx.drawImage(bitmap,ox,oy,map.width*scale,map.height*scale);
   for(const robot of states){
     if(!connected||!robot.online||!robot.map_matches)continue;
+    if(robot.nav.target&&ACTIVE.includes(robot.nav.state))flag(robot.nav.target,colors[robot.id]);
     ctx.strokeStyle=colors[robot.id];ctx.lineWidth=2;ctx.beginPath();
     robot.path.forEach((p,i)=>{const q=worldToScreen(p);i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y)});ctx.stroke();
     if(robot.pose)arrow(robot.pose,robot.pose.yaw,colors[robot.id],robot.id);
@@ -71,14 +86,27 @@ for(const id of ['robot1','robot2']){
   const button=document.createElement('button');button.className='robot';button.style.setProperty('--color',colors[id]);button.id=id;
   button.onclick=()=>{selected=id;drag=null;renderCards();draw();};document.querySelector('#robots').append(button);
 }
+const STATE_EN={idle:'IDLE',accepted:'ACCEPTED',executing:'EXECUTING',canceling:'CANCELING',succeeded:'SUCCEEDED',canceled:'CANCELED',aborted:'ABORTED'};
+const secs=s=>s<60?`${Math.round(s)}초`:`${Math.floor(s/60)}분 ${Math.round(s%60)}초`;
+function navLines(n){
+  const f=n.feedback,lines=[],rec=f&&f.recoveries?` · 복구 ${f.recoveries}회`:'';
+  if(f&&ACTIVE.includes(n.state))lines.push(`남은 거리 ${f.distance.toFixed(2)} m`+(f.remaining>0?` · 약 ${secs(f.remaining)} 남음`:'')+` · ${secs(f.elapsed)} 경과`+rec);
+  if(f&&n.state==='succeeded')lines.push(`${secs(f.elapsed)} 걸림`+rec);
+  if(n.state==='aborted')lines.push('이유: '+(n.error||'모름 (대시보드 밖에서 보낸 목표)')+rec);
+  if(n.target&&n.state!=='idle')lines.push(`목적지 x ${n.target.x.toFixed(2)} · y ${n.target.y.toFixed(2)}`);
+  return lines;
+}
 function renderCards(){
   for(const id of ['robot1','robot2']){
     const r=states.find(r=>r.id===id),el=document.getElementById(id);el.classList.toggle('selected',id===selected);el.setAttribute('aria-pressed',id===selected);
-    let status='서버 연결 대기',detail='';
-    if(connected&&r){status=!r.online?'로봇 odom 수신 끊김':!r.map_matches?'공통 지도 대기 / 불일치':!r.pose?'초기 위치 / TF 대기':r.status;
-      detail=r.pose?`x ${r.pose.x.toFixed(2)} · y ${r.pose.y.toFixed(2)} · ${(r.pose.yaw*180/Math.PI).toFixed(0)}°`:'';}
-    el.replaceChildren();const title=document.createElement('strong');title.textContent=`${id} · domain ${r?r.domain:'…'}`;el.append(title);
-    for(const text of [status,detail]){const line=document.createElement('small');line.textContent=text;el.append(line);}
+    let badge=['offline','서버 연결 대기'],lines=[];
+    if(connected&&r){
+      badge=!r.online?['offline','로봇 odom 수신 끊김']:!r.map_matches?['offline','공통 지도 대기 / 불일치']:!r.pose?['offline','초기 위치 / TF 대기']:[r.nav.state,r.nav.label];
+      if(r.pose)lines=[`x ${r.pose.x.toFixed(2)} · y ${r.pose.y.toFixed(2)} · ${(r.pose.yaw*180/Math.PI).toFixed(0)}°`,...navLines(r.nav)];}
+    el.replaceChildren();const title=document.createElement('strong');title.textContent=`${id} · domain ${r?r.domain:'…'}`;
+    const b=document.createElement('span');b.className='badge '+badge[0];b.textContent=badge[1]+(STATE_EN[badge[0]]?' · '+STATE_EN[badge[0]]:'');
+    el.append(title,b);
+    for(const text of lines){const line=document.createElement('small');line.textContent=text;el.append(line);}
   }
   document.querySelector('#cancel').disabled=busy||!connected;
   document.querySelector('#cancelAll').disabled=busy||!connected;
@@ -111,8 +139,25 @@ canvas.onpointerup=e=>{
   act([d.robot],d.mode,{...p,yaw:heading});
 };
 canvas.onpointercancel=()=>{drag=null;draw();};
+// 목표 상태가 바뀔 때마다 한 줄씩 남긴다(처음 받은 상태는 기록하지 않는다).
+const seen={},events=[];
+function logEvents(){
+  for(const r of states){
+    const n=r.nav,key=`${n.id}:${n.state}`,prev=seen[r.id];seen[r.id]=key;
+    if(prev===undefined||prev===key||n.state==='idle')continue;
+    let text=`${r.id} ${n.label} · ${STATE_EN[n.state]}`;
+    if(n.state==='succeeded'&&n.feedback)text+=` (${secs(n.feedback.elapsed)})`;
+    if(n.state==='aborted')text+=` — ${n.error||'이유 모름'}`;
+    events.unshift({time:new Date().toLocaleTimeString('ko-KR',{hour12:false}),text,state:n.state});events.length=Math.min(events.length,12);
+  }
+  if(!events.length)return;
+  document.querySelector('#events').replaceChildren(...events.map(e=>{
+    const li=document.createElement('li'),t=document.createElement('time');li.className=e.state;t.textContent=e.time;li.append(t,e.text);return li;}));
+}
 async function poll(){
-  try{const data=await request('/api/state');states=data.robots;connected=true;
+  try{const data=await request('/api/state');connected=true;
+    // nav가 없는 예전 서버와도 화면이 깨지지 않게 한다
+    states=data.robots.map(r=>({...r,nav:r.nav||{id:null,state:'idle',label:r.status||'대기',target:null,feedback:null,error:null}}));logEvents();
     if(data.map_id&&data.map_id!==mapId)installMap(await request('/api/map'));
   }catch(e){connected=false;drag=null;message('관제 서버 연결 끊김: '+e.message);}
   renderCards();draw();setTimeout(poll,500);

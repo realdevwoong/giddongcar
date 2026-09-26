@@ -12,7 +12,9 @@ from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
 import yaml
+from action_msgs.msg import GoalStatus, GoalStatusArray
 from geometry_msgs.msg import TransformStamped
+from nav2_msgs.action import NavigateToPose
 from launch import LaunchContext
 from launch.actions import ExecuteProcess
 from launch.utilities import perform_substitutions
@@ -73,14 +75,69 @@ class FleetTests(unittest.TestCase):
 
     def test_disconnect_hides_old_pose(self):
         # Exercise the real snapshot logic without initializing DDS.
-        robot = SimpleNamespace(lock=threading.RLock(), last_odom=time.monotonic()-5,
-                                robot_name='robot1', domain=15, pose={'x': 4},
-                                map_id='same', path=[{'x': 3}], status='이동 중',
-                                navigator=SimpleNamespace(server_is_ready=lambda: True))
+        robot = self.nav_robot()
+        robot.last_odom, robot.pose, robot.path = time.monotonic() - 5, {'x': 4}, [{'x': 3}]
         result = Robot.snapshot(robot)
         self.assertFalse(result['online'])
         self.assertIsNone(result['pose'])
         self.assertEqual(result['path'], [])
+
+    def nav_robot(self):
+        # DDS 없이 상태 처리 코드만 돌리는 가짜 로봇
+        return SimpleNamespace(lock=threading.RLock(), goal=dict(id=None, code=0, feedback=None),
+                               targets={}, errors={}, last_odom=time.monotonic(), robot_name='robot1',
+                               domain=25, pose={'x': 0}, map_id='same', path=[],
+                               navigator=SimpleNamespace(server_is_ready=lambda: True))
+
+    @staticmethod
+    def status(*goals):
+        msg = GoalStatusArray()
+        for uid, code, sec in goals:
+            s = GoalStatus()
+            s.goal_info.goal_id.uuid, s.goal_info.stamp.sec, s.status = [uid] * 16, sec, code
+            msg.status_list.append(s)
+        return msg
+
+    @staticmethod
+    def feedback(uid, distance):
+        msg = NavigateToPose.Impl.FeedbackMessage()
+        msg.goal_id.uuid = [uid] * 16
+        msg.feedback.distance_remaining, msg.feedback.number_of_recoveries = distance, 1
+        msg.feedback.navigation_time.sec = 12
+        return msg
+
+    def test_card_follows_latest_goal_and_its_progress(self):
+        robot = self.nav_robot()
+        Robot.on_status(robot, self.status((1, GoalStatus.STATUS_EXECUTING, 10),
+                                           (2, GoalStatus.STATUS_SUCCEEDED, 5)))
+        Robot.on_feedback(robot, self.feedback(1, 1.234))
+        Robot.on_feedback(robot, self.feedback(2, 9.0))  # 지난 목표의 진행은 무시
+        nav = Robot.snapshot(robot)['nav']
+        self.assertEqual((nav['state'], nav['label']), ('executing', '이동 중'))
+        self.assertEqual(nav['feedback'], dict(distance=1.23, remaining=0.0, elapsed=12.0, recoveries=1))
+        Robot.on_status(robot, self.status((3, GoalStatus.STATUS_ACCEPTED, 20)))
+        nav = Robot.snapshot(robot)['nav']
+        self.assertEqual(nav['state'], 'accepted')
+        self.assertIsNone(nav['feedback'])  # 새 목표면 진행 정보를 비운다
+
+    def test_abort_reason_comes_from_nav2_error_code(self):
+        robot = self.nav_robot()
+        Robot.on_status(robot, self.status((7, GoalStatus.STATUS_ABORTED, 1)))
+        goal_id = robot.goal['id']
+        done = lambda code, msg='': Mock(result=Mock(return_value=SimpleNamespace(
+            result=SimpleNamespace(error_code=code, error_msg=msg))))
+        Robot.on_result(robot, goal_id, done(0))
+        self.assertIsNone(Robot.snapshot(robot)['nav']['error'])
+        Robot.on_result(robot, goal_id, done(208))
+        self.assertEqual(Robot.snapshot(robot)['nav']['error'], '갈 수 있는 경로 없음 (코드 208)')
+        Robot.on_result(robot, goal_id, done(150, 'custom'))
+        self.assertEqual(Robot.snapshot(robot)['nav']['error'], 'custom (코드 150)')
+
+    def test_remember_keeps_only_recent_goals(self):
+        table = {}
+        for i in range(25):
+            dashboard.remember(table, i, i)
+        self.assertEqual(list(table), list(range(5, 25)))
 
     def test_tf_failure_clears_previous_pose(self):
         robot = SimpleNamespace(lock=threading.RLock(), pose={'x': 3}, buffer=Mock())
@@ -235,7 +292,6 @@ class LaunchTests(unittest.TestCase):
         for text in ('0.5,0.5', 'a,b,c', 'nan,0,0', '1,2,3,4'):
             with self.assertRaises(RuntimeError):
                 self.start('true', poses=(text, ''))
-
 
 
 if __name__ == '__main__':
