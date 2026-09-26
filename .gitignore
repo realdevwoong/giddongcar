@@ -3,6 +3,26 @@ pinky_pro/build/
 pinky_pro/install/
 pinky_pro/log/
 
+# Python / pytest 캐시
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 크래시·에디터 임시 파일 (우분투 크래시, vim/gedit/libreoffice)
+core
+core.*
+*.crash
+*.swp
+*~
+.~lock*
+nohup.out
+
+# 시스템 로그 (ros2 launch가 만드는 log/, rosbag)
+log/
+*.bag
+*.mcap
+*.db3
+
 # Secrets / credentials safety net
 *.pem
 *.key
@@ -11,4 +31,3 @@ pinky_pro/log/
 *_ed25519
 credentials.json
 secrets.yaml
-__pycache__

@@ -2,6 +2,9 @@
 
 Pinky Pro 다중 로봇 관제 프로젝트 (ROS2 workspace: `pinky_pro/`).
 
+- 작업 규칙과 폴더 안내: [AGENTS.md](AGENTS.md)
+- 실행 방법: [Gazebo](docs/sim.md) · [실물 로봇](docs/real.md) · 코드 배치: [docs/structure.md](docs/structure.md) · Git: [docs/git.md](docs/git.md)
+
 ## 워크스페이스 설정 (팀원 최초 1회)
 
 **반드시 홈 디렉터리 바로 아래(`~/giddongcar`)에 클론하세요.** 다른 경로에 클론하면 로컬 빌드 캐시(`pinky_pro/build`, `pinky_pro/install`)가 그 경로를 기억해서, 나중에 폴더를 옮기면 빌드가 깨집니다.
