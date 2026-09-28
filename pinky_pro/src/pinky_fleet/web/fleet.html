@@ -1,167 +1,1691 @@
 <!doctype html>
 <html lang="ko">
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Pinky Fleet</title>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pinky Fleet 관제</title>
 <style>
-*{box-sizing:border-box}body{margin:0;background:#101723;color:#e7edf6;font:15px system-ui,sans-serif}
-header{padding:20px 28px;border-bottom:1px solid #304055;display:flex;align-items:center;gap:20px}h1{margin:0;font-size:24px}header span{color:#aebdd0}
-main{display:grid;grid-template-columns:300px 1fr;min-height:calc(100vh - 73px)}aside{padding:20px;border-right:1px solid #304055}h2{font-size:16px;margin:0 0 12px}
-button,select{font:inherit;color:inherit;background:#253449;border:1px solid #526278;border-radius:7px;padding:10px;cursor:pointer}button:disabled{opacity:.4;cursor:default}
-.robot{display:block;width:100%;text-align:left;margin:10px 0;padding:16px;border-left:5px solid var(--color)}.robot.selected{background:#34445c;outline:1px solid var(--color)}.robot small{display:block;line-height:1.8;color:#bdccdf}.robot strong{display:block;margin-bottom:8px}
-label{display:block;margin:22px 0 8px}select{width:100%}.actions{display:flex;gap:8px;margin-top:12px}.actions button{flex:1}.cancel{background:#60343e}
-p{line-height:1.7;color:#adbbcf;font-size:13px}#message{min-height:60px;color:#f4d18a;white-space:pre-wrap}.maparea{padding:20px;display:flex;flex-direction:column;min-width:0}.bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}#mapInfo{color:#b0c0d5;font-size:13px}
-.canvaswrap{flex:1;position:relative;min-height:420px;background:#182333;border-radius:12px;overflow:hidden}canvas{display:block;width:100%;height:100%;position:absolute;touch-action:none}#empty{position:absolute;top:45%;width:100%;text-align:center;pointer-events:none;color:#b0c0d5}
-.badge{display:inline-block;margin:0 0 6px;padding:3px 10px;border-radius:99px;font-size:13px;font-weight:600;background:#3a4659}
-.badge.accepted,.badge.executing{background:#1d5d96}.badge.succeeded{background:#1e7b4c}.badge.aborted{background:#9a2f3d}.badge.canceled,.badge.canceling{background:#80611d}.badge.offline{background:#4a4f58}
-.badge.executing::before{content:'';display:inline-block;width:8px;height:8px;margin-right:6px;border-radius:50%;background:#9fd3ff;animation:blink 1s infinite}
-@keyframes blink{50%{opacity:.2}}@media(prefers-reduced-motion:reduce){.badge.executing::before{animation:none}}
-#events{list-style:none;padding:0;margin:0;font-size:13px;line-height:1.8;max-height:200px;overflow:auto}#events li{border-left:3px solid #3a4659;padding-left:8px}#events time{color:#8797ab;margin-right:6px}
-#events .succeeded{border-color:#2fae6d}#events .aborted{border-color:#d9485c}#events .canceled,#events .canceling{border-color:#c79a2e}#events .accepted,#events .executing{border-color:#3f8fd6}
-@media(max-width:760px){main{grid-template-columns:1fr}aside{border-right:0}.canvaswrap{height:60vh;flex:auto}header span{display:none}}
+/* ───── 색·크기 (외부 글꼴·CDN 없음: 학원 네트워크가 끊겨도 그대로 뜬다) ───── */
+:root {
+  --bg: #0e141d; --panel: #151e2b; --card: #172232; --line: #2c3a4e; --edge: #45556b;
+  --text: #e7edf6; --muted: #a3b2c6; --red: #ff6b6b; --amber: #f2b441; --focus: #ffd84d;
+  --hdr: 52px; --tools: 48px; --strip: 200px; --gut: 12px;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+  background: var(--bg); color: var(--text);
+  font: 15px/1.4 system-ui, 'Noto Sans KR', 'Noto Sans CJK KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif;
+}
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+[hidden] { display: none !important; }
+.num { font-variant-numeric: tabular-nums; }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+/* 로봇 번호 원: 색 + 숫자 (색만으로 구분하지 않는다) */
+.disc { display: inline-grid; place-items: center; flex: none; width: 20px; height: 20px; border-radius: 50%;
+  background: var(--rc); color: var(--bg); font-size: 12px; font-weight: 800; line-height: 1; box-shadow: 0 0 0 1px var(--bg); }
+
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 0 12px;
+  border: 1px solid #4a5b73; border-radius: 8px; background: #1f2d42; font-size: 14px; white-space: nowrap; }
+.btn:hover { background: #29405e; }
+.btn svg { width: 18px; height: 18px; flex: none; }
+.btn[aria-disabled="true"] { opacity: .5; border-style: dashed; cursor: not-allowed; }
+.btn.cancel { background: transparent; border: 1.5px solid var(--red); }
+.btn.cancel:hover { background: #3a1c24; }
+.btn.fill { background: var(--rc); border-color: var(--rc); color: var(--bg); font-weight: 700; }
+.btn.sm { min-height: 28px; padding: 0 9px; border-radius: 7px; font-size: 13px; }
+
+/* ───── 머리줄: 연결 상태 · 알림 · 전체 이동 취소 ───── */
+header { position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
+  min-height: var(--hdr); padding: 5px var(--gut); background: var(--bg); border-bottom: 1px solid var(--line); }
+h1 { margin: 0; font-size: 18px; font-weight: 700; white-space: nowrap; }
+.conn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 14px;
+  border: 1px solid var(--line); font-size: 13px; white-space: nowrap; }
+.conn.fresh .cg { color: #3ecf7e; }
+.conn.slow { border-color: var(--amber); color: var(--amber); }
+.conn.lost { border-color: #b42335; background: #b42335; color: #fff; }
+.alert { flex: 1 1 360px; min-width: 0; min-height: 36px; display: flex; align-items: center; gap: 8px;
+  padding: 0 4px 0 10px; border-radius: 8px; background: #b42335; color: #fff; font-size: 14px; }
+.alert.warn { background: var(--amber); color: #1a1200; }
+/* 주황 바탕 위에서는 노란 포커스 링·주황 번호 원이 묻힌다 → 어두운 색으로 */
+.alert.warn :focus-visible { outline-color: #1a1200; }
+.alert.warn .disc { box-shadow: 0 0 0 2px #1a1200; }
+.alert.empty { visibility: hidden; }
+.alert-robot { display: inline-flex; align-items: center; gap: 6px; flex: none; padding: 0; border: 0; background: none;
+  font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+.alert-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.alert-more { flex: none; font-size: 12px; font-weight: 700; }
+.alert-ack { flex: none; height: 28px; padding: 0 12px; border: 1.5px solid currentColor; border-radius: 6px;
+  background: transparent; font-size: 13px; font-weight: 700; }
+.cancel-all { height: 40px; flex-direction: column; gap: 0; line-height: 1.15; font-weight: 700; }
+.cancel-all small { font-size: 11px; font-weight: 400; color: var(--muted); }
+.help-btn { width: 40px; padding: 0; font-size: 16px; font-weight: 700; }
+
+/* ───── 본문 격자 (기본 = 앱 모드(폭 1100px·높이 620px 이상)가 아닐 때: 노트북에서 창을 반만 띄울 때 등. 페이지가 스크롤된다) ───── */
+main { flex: 1; min-width: 0; display: grid; gap: 8px; padding: 8px var(--gut) var(--gut);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: auto clamp(320px, 55vh, 560px) auto auto auto;
+  grid-template-areas: "tools tools" "map map" "coords coords" "c1 c2" "log log"; }
+
+/* 도구줄: RViz처럼 지도 바로 위. 로봇마다 [상태 칩][초기 위치][목적지] */
+.tools { grid-area: tools; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; min-height: var(--tools); }
+.tgroup { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.tsep { width: 1px; height: 28px; margin: 0 4px; background: var(--line); }
+.rchip { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px 0 8px; border-radius: 8px;
+  border: 1px solid var(--line); border-left: 4px solid var(--rc); background: var(--card); white-space: nowrap; }
+.rchip[aria-pressed="true"] { background: #22324a; border-color: var(--rc); box-shadow: inset 0 0 0 1px var(--rc); }
+.rname { font-size: 15px; font-weight: 700; }
+.rstat { min-width: 5.6em; font-size: 14px; text-align: left; }
+.tool { height: 40px; }
+.tool[aria-pressed="true"] { background: var(--rc); border-color: var(--rc); color: var(--bg); font-weight: 700; }
+.tools-end { margin-left: auto; display: flex; align-items: center; gap: 10px; min-width: 0; }
+.mapinfo { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--muted); }
+.st-blue { color: #8cc8ff; } .st-green { color: #6fdca0; } .st-red { color: var(--red); }
+.st-amber { color: var(--amber); } .st-grey { color: var(--muted); }
+
+/* 지도 */
+.mapbox { grid-area: map; position: relative; min-width: 0; min-height: 0; overflow: hidden;
+  border-radius: 12px; background: var(--panel); }
+.mapbox.armed::after { content: ''; position: absolute; inset: 0; border-radius: 12px; pointer-events: none;
+  box-shadow: inset 0 0 0 2px var(--armc); }
+#map { position: absolute; inset: 0; display: block; width: 100%; height: 100%; touch-action: pan-y; }
+#map.armed { touch-action: none; cursor: crosshair; }
+/* 지도 바로 아래 좌표 줄: 두 로봇 위치(상태를 받을 때마다 갱신)와 커서 좌표. 숫자 폭이 고정이라 흔들리지 않는다 */
+.coordbar { grid-area: coords; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; font-size: 13px; }
+.cchip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid var(--line);
+  border-radius: 99px; background: var(--card); color: var(--text); font: inherit; white-space: nowrap; }
+button.cchip { cursor: pointer; } button.cchip:hover { background: #29405e; }
+button.cchip[aria-pressed="true"] { border-color: var(--rc); box-shadow: inset 0 0 0 1px var(--rc); }
+.cchip .off { color: var(--muted); }
+.clegend { margin-left: auto; color: var(--muted); white-space: nowrap; }
+.clegend i { display: inline-block; width: 16px; margin-right: 4px; border-top: 2px solid currentColor; vertical-align: middle; }
+.overlay { position: absolute; inset: 0; display: grid; place-items: center; padding: 16px; text-align: center;
+  color: var(--muted); pointer-events: none; }
+.overlay span { max-width: 36em; padding: 8px 14px; border-radius: 8px; background: rgba(14, 20, 29, .9); }
+.overlay.scrim { background: rgba(14, 20, 29, .4); color: #fff; }
+.overlay.scrim span { border: 1.5px solid var(--red); }
+
+/* 안내 슬롯: 지도 위 가운데 */
+.hint { grid-area: map; z-index: 3; align-self: start; justify-self: center; width: max-content; max-width: min(760px, 94%);
+  min-width: 0; margin-top: 2px; display: flex; flex-direction: column; align-items: center; gap: 6px; pointer-events: none; }
+.pill { display: flex; align-items: center; gap: 8px; max-width: 100%; min-height: 32px; padding: 2px 4px 2px 8px;
+  border: 1px solid var(--edge); border-radius: 16px; background: rgba(14, 20, 29, .9); font-size: 14px; }
+.pill .ht { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hbtn { flex: none; height: 26px; padding: 0 10px; border: 1px solid #5b6d87; border-radius: 13px; background: #22324a;
+  font-size: 13px; white-space: nowrap; pointer-events: auto; }
+.hbtn.fill { background: var(--rc); border-color: var(--rc); color: var(--bg); font-weight: 700; }
+.coord { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; padding: 8px 10px; border: 1px solid var(--edge);
+  border-radius: 10px; background: rgba(14, 20, 29, .95); font-size: 13px; pointer-events: auto; }
+.coord label { display: flex; flex-direction: column; gap: 2px; color: var(--muted); }
+.coord input { width: 84px; height: 32px; padding: 0 8px; border: 1px solid #5b6d87; border-radius: 6px; background: var(--card); }
+.coord .err { flex-basis: 100%; color: var(--red); }
+.coord .err:empty, .coord .cwarn:empty { display: none; }
+.coord .cwarn { flex-basis: 100%; color: var(--amber); }
+
+/* ───── 로봇 카드 (줄 구조가 고정이라 상태가 바뀌어도 지도가 흔들리지 않는다) ─────
+   줄: 머리(이름·버튼, 항상 한 줄) → 상태 띠(+진행 막대) → 설명(최대 2줄) → 위치 → 요청 결과·램프 */
+.card { position: relative; min-width: 0; display: flex; flex-direction: column; gap: 4px; overflow: hidden;
+  padding: 10px 14px 10px 12px; border: 1px solid var(--line); border-left: 5px solid var(--rc); border-radius: 10px;
+  background: var(--card); container-type: inline-size; }
+.card > * { flex: none; }   /* 줄이 글자 중간에서 눌려 잘리지 않게 */
+/* 카드가 좁으면 domain 글자 → 다시 보내기 좌표 순으로 숨긴다 ('이동 취소' 글자는 줄이지 않는다) */
+@container (max-width: 540px) { .card.crowded .dom, .card.crowded .seltag { display: none; } }
+@container (max-width: 420px) { .resend-xy { display: none; } }
+@container (max-width: 330px) { .dom { display: none; } }
+#card-robot1 { grid-area: c1; } #card-robot2 { grid-area: c2; }
+.card.sel { outline: 2px solid var(--rc); outline-offset: -1px; }
+.card.bad { border-left-color: var(--red); }
+.card.pulse { animation: pulse 2s ease-in-out infinite; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 3px rgba(255, 107, 107, .9); } }
+/* 끊긴 로봇: 이름·설명만 흐리게. 아직 누를 수 있는 '이동 취소'와 마지막 위치 줄은 원래 밝기 */
+.card.dim .c-name, .card.dim .detail { opacity: .6; }
+.card.stale { opacity: .7; }
+.c-head { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; min-width: 0; min-height: 28px; }
+.c-name { display: inline-flex; align-items: center; gap: 7px; flex: 0 1 auto; min-width: 0; margin-left: -4px; padding: 0 4px;
+  border: 0; border-radius: 6px; background: none; font-size: 16px; font-weight: 700; white-space: nowrap; overflow: hidden; }
+.c-name .cn { flex: none; }
+.c-name .dom { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 13px; font-weight: 400; color: var(--muted); }
+.tag { flex: none; padding: 1px 7px; border: 1px solid var(--rc); border-radius: 9px; font-size: 12px; white-space: nowrap; }
+.c-actions { margin-left: auto; display: flex; gap: 6px; flex: none; }
+.band { position: relative; display: flex; align-items: center; gap: 8px; min-width: 0; height: 44px; padding: 0 6px 0 12px;
+  border: 1.5px solid transparent; border-radius: 8px; white-space: nowrap; }
+.b-glyph, .b-ko { flex: none; font-size: 20px; font-weight: 700; }
+.b-en { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 12px; font-weight: 700; letter-spacing: .08em; }
+.b-extra { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+.b-right { margin-left: auto; display: flex; align-items: center; gap: 6px; flex: none; }
+.t-grey { border-color: #6b7686; }
+.t-dash { border: 1.5px dashed #6b7686; color: var(--muted); }
+.t-blue-o { border-color: #3f8fd6; }
+.t-amber-o { border-color: var(--amber); }
+.t-blue { background: #1d5d96; border-color: #1d5d96; color: #fff; }
+.t-green { background: #1e7b4c; border-color: #1e7b4c; color: #fff; }
+.t-red { background: #b42335; border-color: #b42335; color: #fff; }
+.t-greyfill { background: #4b5563; border-color: #4b5563; color: #fff; }
+/* 띠 위 알약: 어떤 띠 색 위에서도 읽히게 항상 채운 주황 + 어두운 글자 */
+.chip { flex: none; padding: 2px 8px; border-radius: 10px; background: var(--amber); color: #1a1200;
+  font-size: 12px; font-weight: 700; white-space: nowrap; }
+.ack { height: 30px; padding: 0 12px; border: 1.5px solid currentColor; border-radius: 6px; background: rgba(0, 0, 0, .15);
+  font-size: 13px; font-weight: 700; }
+/* 진행 막대는 '이동 중' 띠 아래쪽에 붙인다 (따로 줄을 차지하지 않는다) */
+.prog { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; border-radius: 0 0 6px 6px; overflow: hidden;
+  background: rgba(0, 0, 0, .35); visibility: hidden; }
+.prog.on { visibility: visible; }
+.prog i { display: block; width: 0; height: 100%; background: #fff; }
+.detail { margin: 2px 0 0; font-size: 15px; line-height: 1.35; overflow: hidden; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.posline { margin: 0; min-height: 1.4em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--muted); }
+.foot { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 1.4em; margin-top: auto; font-size: 13px; }
+.result { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.result.bad { color: var(--red); }
+.result.old { color: var(--muted); }
+/* 램프: 오른쪽 끝에 짧게. 요청 결과가 새로 뜨면(10초) 견본 + ✓/✕만 남기고 자리를 내준다 */
+.lamp { display: inline-flex; align-items: center; gap: 5px; flex: none; margin-left: auto; white-space: nowrap; }
+.lamp.compact .lamp-t { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.lamp-ok { color: #6fdca0; font-weight: 700; }
+.lamp-fail { padding: 0 2px; border: 0; background: none; color: var(--red); font-size: 13px; font-weight: 700;
+  text-decoration: underline; text-underline-offset: 3px; }
+.sw { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--sw); }
+.sw.white { box-shadow: 0 0 0 1px var(--bg), 0 0 0 2px #6b7686; }
+.sw.hollow { background: transparent; box-shadow: inset 0 0 0 2px var(--sw); }
+
+/* ───── 이벤트 기록 ───── */
+.log { grid-area: log; min-width: 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+.log summary { padding: 2px 0; font-size: 14px; font-weight: 700; cursor: pointer; }
+.log-empty { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
+.log ol { max-height: 280px; margin: 6px 0 0; padding: 0; overflow: auto; list-style: none; font-size: 13px; }
+.log li { display: flex; align-items: flex-start; gap: 6px; margin-bottom: 3px; padding: 2px 0 2px 8px; border-left: 3px solid #4a5568; }
+.log time { flex: none; color: var(--muted); }
+.log .disc { width: 18px; height: 18px; font-size: 11px; margin-top: 1px; }
+.log .lg { flex: none; }
+.log .tx { min-width: 0; overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.log .sev-ok { border-color: #2fae6d; } .log .sev-move { border-color: #3f8fd6; }
+.log .sev-warn { border-color: var(--amber); } .log .sev-crit { border-color: var(--red); }
+
+/* 도움말 */
+dialog { width: min(640px, calc(100vw - 24px)); max-height: calc(100vh - 48px); padding: 16px 20px; color: var(--text);
+  border: 1px solid var(--edge); border-radius: 12px; background: var(--card); font-size: 14px; }
+dialog::backdrop { background: rgba(0, 0, 0, .55); }
+dialog h2 { margin: 0; font-size: 18px; } dialog h3 { margin: 16px 0 6px; font-size: 15px; }
+.help-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+dialog table { border-collapse: collapse; width: 100%; } dialog td { padding: 3px 8px 3px 0; vertical-align: top; }
+dialog kbd { display: inline-block; min-width: 24px; padding: 0 6px; border: 1px solid var(--edge); border-radius: 4px;
+  background: var(--bg); font-family: inherit; font-size: 13px; line-height: 1.6; text-align: center; }
+dialog ul, dialog dl { margin: 0; padding-left: 18px; line-height: 1.6; } dialog dd { margin: 0 0 6px; } dialog dl { padding: 0; }
+dialog dt { font-weight: 700; }
+
+/* ───── 앱 모드 (넓고 충분히 높은 화면): 페이지 스크롤 없이 지도가 남는 높이를 모두 쓴다 ───── */
+@media (min-width: 1100px) and (min-height: 620px) {
+  body { height: 100vh; overflow: hidden; }
+  main { min-height: 0; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(300px, .9fr);
+    grid-template-rows: var(--tools) minmax(0, 1fr) auto var(--strip);
+    grid-template-areas: "tools tools tools" "map map map" "coords coords coords" "c1 c2 log"; }
+  .tools { flex-wrap: nowrap; }
+  .log ol { max-height: calc(var(--strip) - 48px); }
+  .log summary { list-style: none; cursor: default; }
+  .log summary::-webkit-details-marker { display: none; }
+  /* 선택 표시는 카드 윤곽선·도구줄 칩·지도 점선 고리로 충분하다 → 머리줄을 한 줄로 지킨다 */
+  .seltag { display: none; }
+}
+/* 낮은 화면(프로젝터 1280x720 등) */
+@media (max-height: 760px) {
+  :root { --hdr: 48px; --tools: 44px; --strip: 176px; }
+  header { padding-block: 3px; }
+}
+/* 낮은 화면의 앱 모드: 줄은 그대로 두고(위치 줄도 보인다) 간격·글자만 조금 줄인다 */
+@media (min-width: 1100px) and (min-height: 620px) and (max-height: 760px) {
+  .card { gap: 3px; padding-block: 8px; }
+  .band { height: 40px; }
+  .detail { font-size: 14px; line-height: 1.3; }
+  .rchip, .tool { height: 36px; }
+}
+@media (max-width: 1099px) {
+  .alert { order: 9; flex-basis: 100%; }
+  .alert.empty { display: none; }
+  .cancel-all { height: 36px; }
+  .cancel-all small, .mapinfo { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
 </style>
-<header><h1>Pinky Fleet</h1><span>두 로봇 · 하나의 지도</span></header>
-<main><aside><h2>로봇 선택</h2><div id="robots"></div>
-<label for="mode">지도 조작</label><select id="mode"><option value="initialpose">초기 위치 설정</option><option value="goal">목적지 지정</option></select>
-<p>선택한 로봇의 위치에서 드래그하여 방향을 지정하세요. 먼저 두 로봇의 실제 초기 위치를 각각 설정하세요.</p>
-<div class="actions"><button id="cancel" class="cancel">선택 이동 취소</button><button id="cancelAll" class="cancel">전체 이동 취소</button></div>
-<p>이동 취소는 Nav2 목표를 취소합니다. 수동 키보드 조작을 정지시키는 버튼은 아닙니다.</p>
-<div id="message" role="status" aria-live="polite">지도와 로봇 데이터를 기다리는 중입니다.</div>
-<h2>이벤트</h2><ul id="events"><li>아직 없음</li></ul>
-</aside><section class="maparea"><div class="bar"><span id="mapInfo">공통 지도 대기</span><button id="fit">지도 맞춤</button></div>
-<div class="canvaswrap"><canvas id="map" aria-label="두 로봇의 위치와 경로 지도"></canvas><div id="empty">지도 수신 대기 중…</div></div>
-<p>파랑: robot1 · 주황: robot2 · 선: 계획 경로 · 깃발: 목적지 · 위치 단위: m</p></section></main>
+</head>
+<body>
+<!-- 아이콘 3개는 인라인 SVG로 (외부 파일 없음) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="i-pose" viewBox="0 0 20 20"><circle cx="6.5" cy="13.5" r="3" fill="none" stroke="currentColor" stroke-width="2"/>
+    <path d="M9 11 16 4M11 4h5v5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-flag" viewBox="0 0 20 20"><path d="M5 18V3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    <path d="M5 3.5h10l-2.5 3.5 2.5 3.5H5z" fill="currentColor"/></symbol>
+  <symbol id="i-fit" viewBox="0 0 20 20"><path d="M3 8V3h5M12 3h5v5M17 12v5h-5M8 17H3v-5" fill="none" stroke="currentColor"
+    stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</svg>
+
+<header>
+  <h1>Pinky Fleet 관제</h1>
+  <span class="conn" id="conn" title=""><span class="cg" aria-hidden="true">…</span><span id="connText">서버 연결 중</span></span>
+  <div class="alert empty" id="alert">
+    <button type="button" class="alert-robot" id="alertRobot"></button>
+    <span class="alert-text" id="alertText"></span><span class="alert-more" id="alertMore"></span>
+    <button type="button" class="alert-ack" id="alertAck" title="이 알림을 숨겨요. 로봇에는 아무것도 보내지 않아요.">알림 끄기</button>
+  </div>
+  <button type="button" class="btn cancel cancel-all" id="cancelAll" aria-keyshortcuts="Shift+X"
+    title="두 로봇의 Nav2 목표를 취소합니다. 비상 정지가 아니에요 — 키보드(teleop) 조작은 멈추지 않아요. (Shift+X)">
+    <span><span aria-hidden="true">■ </span>전체 이동 취소</span>
+    <small>Nav2 목표만</small></button>
+  <button type="button" class="btn help-btn" id="helpBtn" aria-label="도움말" aria-keyshortcuts="Shift+?" title="도움말 (?)">?</button>
+</header>
+
+<main id="main">
+  <div class="tools" id="tools" role="group" aria-label="지도 도구">
+    <!-- 로봇별 도구 묶음 2개는 스크립트가 아래 템플릿으로 넣는다 -->
+    <div class="tools-end">
+      <span class="mapinfo num" id="mapInfo">지도 대기</span>
+      <button type="button" class="btn" id="fitBtn" title="지도 맞춤 (F)" aria-keyshortcuts="F" aria-label="지도 맞춤">
+        <svg aria-hidden="true"><use href="#i-fit"/></svg><span>맞춤</span></button>
+    </div>
+  </div>
+
+  <section class="mapbox" id="mapBox" aria-label="지도">
+    <canvas id="map" role="img" aria-label="두 로봇의 위치와 경로 지도" aria-describedby="mapSummary"></canvas>
+    <div class="overlay" id="overlay"><span id="overlayText">지도 수신 대기 중…</span></div>
+    <div class="sr-only" id="mapSummary"></div>
+  </section>
+
+  <div class="coordbar num" id="coordBar" role="group" aria-label="현재 좌표">
+    <button type="button" class="cchip" id="coord-robot1"></button>
+    <button type="button" class="cchip" id="coord-robot2"></button>
+    <span class="cchip" id="curChip" aria-hidden="true">✛ 커서 <span id="curXY" class="off">지도 위에 올려 보세요</span></span>
+    <span class="clegend"><i aria-hidden="true"></i>계획 경로 · ⚑ 목적지 · 단위 m, 각도 °</span>
+  </div>
+
+  <div class="hint" id="hint" hidden>
+    <div class="pill" id="hintPill" role="status">
+      <span class="disc" id="hintDisc" aria-hidden="true" hidden></span><span class="sr-only" id="hintWho"></span>
+      <span class="ht" id="hintText"></span>
+      <button type="button" class="hbtn fill" id="hintSetup" hidden>↗ 초기 위치 찍기</button>
+      <button type="button" class="hbtn" id="hintCoord" hidden>좌표 입력</button>
+      <button type="button" class="hbtn" id="hintOff" aria-keyshortcuts="Escape" hidden
+        title="지도 도구만 꺼요. 로봇의 이동 목표는 그대로예요.">도구 끄기 (Esc)</button>
+    </div>
+    <form class="coord" id="coord" hidden novalidate>
+      <label>x (m)<input type="number" step="0.01" id="cx"></label>
+      <label>y (m)<input type="number" step="0.01" id="cy"></label>
+      <label>방향 (°)<input type="number" step="1" id="cdeg"></label>
+      <button type="submit" class="btn sm fill" id="coordSend">보내기</button>
+      <button type="button" class="btn sm" id="coordClose">닫기</button>
+      <span class="err" id="coordErr" role="alert"></span>
+      <span class="cwarn" id="coordWarn" aria-live="polite"></span>
+    </form>
+  </div>
+
+  <!-- 로봇 카드 2개는 스크립트가 템플릿으로 여기(기록 앞)에 넣는다 -->
+  <section class="log" id="logBox" aria-label="이벤트 기록">
+    <details id="logDetails" open>
+      <summary>이벤트 기록 (<span id="logCount">0</span>)</summary>
+      <p class="log-empty" id="logEmpty">아직 없음 — 목표를 보내면 상태 변화가 여기 쌓여요</p>
+      <ol id="logList" role="log" aria-live="off"></ol>
+    </details>
+  </section>
+</main>
+
+<!-- 스크린리더 전용: 요청 결과(공손), 새 위급 알림(즉시) -->
+<div class="sr-only" id="srPolite" role="status" aria-live="polite"></div>
+<div class="sr-only" id="srAssert" aria-live="assertive"></div>
+
+<dialog id="help" aria-labelledby="helpTitle">
+  <div class="help-head"><h2 id="helpTitle">도움말</h2>
+    <form method="dialog"><button class="btn sm">닫기 (Esc)</button></form></div>
+  <h3>단축키</h3>
+  <table>
+    <tr><td><kbd>1</kbd> <kbd>2</kbd></td><td>로봇 선택 · 도구가 켜져 있으면 같은 도구를 그 로봇으로 옮김</td></tr>
+    <tr><td><kbd>P</kbd></td><td>선택한 로봇의 초기 위치 도구 (RViz 2D Pose Estimate)</td></tr>
+    <tr><td><kbd>G</kbd></td><td>선택한 로봇의 목적지 도구 (RViz Nav2 Goal)</td></tr>
+    <tr><td><kbd>Esc</kbd></td><td>좌표 입력 닫기 → 끌기 취소 → 도구 풀기 (Nav2 목표는 취소하지 않아요)</td></tr>
+    <tr><td><kbd>F</kbd></td><td>지도 맞춤</td></tr>
+    <tr><td><kbd>X</kbd> / <kbd>Shift</kbd>+<kbd>X</kbd></td><td>선택한 로봇 / 두 로봇 이동 취소 (Nav2 목표 취소만 — 새 목표는 보내지 않고, 비상 정지도 아니에요)</td></tr>
+    <tr><td><kbd>?</kbd></td><td>이 도움말</td></tr>
+    <tr><td><kbd>Shift</kbd> + 놓기</td><td>도구를 켜 둔 채로 계속 지정</td></tr>
+  </table>
+  <p><label><input type="checkbox" id="kbdOff"> 글자 단축키 끄기 (Esc는 계속 동작)</label></p>
+  <h3>지도 읽는 법</h3>
+  <ul>
+    <li>번호 원 ① ② = 로봇, 흰 쐐기 = 바라보는 방향, 점선 고리 = 선택한 로봇</li>
+    <li>실선 = robot1 경로, 점선 = robot2 경로</li>
+    <li>채운 깃발 = 진행 중인 목적지(아래 눈금 = 도착 방향), 빈 빨강 깃발과 ✕ = 실패한 목적지</li>
+    <li>빨간 고리와 ! = 이동 실패 · 점선 빈 원 = 연결이 끊긴 로봇의 마지막 위치</li>
+    <li>밝은 칸 = 바닥, 어두운 칸 = 벽, 청회색 = 미탐색 · 옅은 격자 = 0.5 m</li>
+  </ul>
+  <h3>용어</h3>
+  <dl>
+    <dt>초기 위치</dt><dd>RViz의 2D Pose Estimate와 같아요. AMCL에 /initialpose로 “로봇이 지금 여기 있어요”를 알려요.</dd>
+    <dt>목적지</dt><dd>RViz의 Nav2 Goal과 같아요. navigate_to_pose 목표를 보내요.</dd>
+    <dt>복구</dt><dd>막혔을 때 Nav2가 스스로 하는 후진·제자리 회전·기다리기.</dd>
+    <dt>이동 취소</dt><dd>Nav2 목표 취소예요. 비상 정지가 아니에요. pinky_bringup은 마지막 cmd_vel을 계속 따르니,
+      키보드(teleop)로 몰았다면 그 터미널에서 0 속도를 한 번 보내세요.</dd>
+    <dt id="helpLamp" tabindex="-1">램프</dt><dd>대시보드가 목표 상태에 맞춰 로봇 램프에 보낸 명령이에요(예: 이동 중 파랑 깜빡임, 도착 초록,
+      실패 빨강 빠른 깜빡임). ✓ = 램프 노드가 받았어요. 실제 불빛은 로봇에서 확인해요.
+      <br><b>✕ 램프 응답 없음</b> = 램프 노드(set_lamp)가 없거나, 3초 안에 답이 없거나, 거부했어요. 대시보드가 알아서 다시 보내요. pinky_bringup은 램프 노드를 켜 주지 않으니 로봇에서 따로 실행하세요
+      (시뮬은 sim.launch.py가 켜요). 대시보드가 2초마다 다시 보내요.</dd>
+    <dt>알림 끄기</dt><dd>머리줄·카드의 알림만 숨겨요. 로봇에는 아무것도 보내지 않아요.</dd>
+    <dt>방향</dt><dd>0° = +x(오른쪽), 반시계 방향이 +.</dd>
+  </dl>
+</dialog>
+
+<template id="tplGroup">
+  <div class="tgroup" role="group">
+    <button type="button" class="rchip" data-el="chip" aria-pressed="false">
+      <span class="disc" data-el="chipDisc" aria-hidden="true"></span><span class="rname" data-el="chipName"></span>
+      <span class="rstat"><span data-el="chipGlyph" aria-hidden="true"></span> <span data-el="chipText"></span></span>
+    </button>
+    <button type="button" class="btn tool" data-el="toolPose" aria-pressed="false" aria-keyshortcuts="P">
+      <svg aria-hidden="true"><use href="#i-pose"/></svg><span>초기 위치</span></button>
+    <button type="button" class="btn tool" data-el="toolGoal" aria-pressed="false" aria-keyshortcuts="G">
+      <svg aria-hidden="true"><use href="#i-flag"/></svg><span>목적지</span></button>
+  </div>
+</template>
+
+<template id="tplCard">
+  <section class="card">
+    <div class="c-head">
+      <button type="button" class="c-name" data-el="name" aria-pressed="false">
+        <span class="disc" data-el="cardDisc" aria-hidden="true"></span><span class="cn" data-el="cardName"></span>
+        <span class="dom num" data-el="dom"></span></button>
+      <span class="tag seltag" data-el="selTag">선택됨</span>
+      <span class="c-actions">
+        <button type="button" class="btn sm" data-el="resend" hidden><span>↻ 다시 보내기<span class="resend-xy num" data-el="resendXY"></span></span></button>
+        <button type="button" class="btn sm fill" data-el="setpose" hidden>↗ 초기 위치 찍기</button>
+        <button type="button" class="btn sm cancel" data-el="cancel" aria-keyshortcuts="X"><span>■ 이동 취소</span></button>
+      </span>
+    </div>
+    <div class="band" data-el="band">
+      <span class="b-glyph" data-el="glyph" aria-hidden="true"></span><span class="b-ko" data-el="ko"></span>
+      <span class="b-en" lang="en" data-el="en"></span><span class="b-extra num" data-el="extra"></span>
+      <span class="b-right"><span class="chip" data-el="navChip" hidden>Nav2 준비 안 됨</span><span class="chip num" data-el="rec" hidden></span>
+        <button type="button" class="ack" data-el="ack" hidden title="이 알림을 숨겨요. 로봇에는 아무것도 보내지 않아요.">알림 끄기</button></span>
+      <div class="prog" data-el="prog" aria-hidden="true"><i data-el="progBar"></i></div>
+    </div>
+    <p class="detail num" data-el="detail"></p>
+    <p class="posline num" data-el="pos"></p>
+    <div class="foot">
+      <span class="result num" data-el="result"></span>
+      <span class="lamp" data-el="lamp" hidden
+        title="대시보드가 목표 상태에 맞춰 로봇 램프에 보낸 명령이에요. ✓ = 램프 노드가 받음. 실제 불빛은 로봇에서 확인해요.">
+        <i class="sw" data-el="lampSw" aria-hidden="true"></i><span class="lamp-t" data-el="lampText"></span><span data-el="lampMark"></span>
+        <button type="button" class="lamp-fail" data-el="lampFail" hidden aria-label="램프 응답 없음 — 도움말 열기">✕ 램프 응답 없음</button></span>
+    </div>
+    <!-- 자리: 카메라 미리보기(MJPEG) — 주소는 API에서 받는다. 그 전에는 아무것도 그리지 않는다 -->
+    <div class="cam" data-el="cam" hidden></div>
+  </section>
+</template>
+
 <script>
-const canvas=document.querySelector('#map'), ctx=canvas.getContext('2d');
-const colors={robot1:'#52b7ff',robot2:'#ffaf60'};
-let selected='robot1', states=[], map=null, mapId=null, bitmap=null, scale=1, ox=0, oy=0, drag=null, busy=false, connected=false;
-const message=text=>document.querySelector('#message').textContent=text;
-function fit(){
-  if(!map)return;
-  scale=Math.min((canvas.width-50)/map.width,(canvas.height-50)/map.height);
-  ox=(canvas.width-map.width*scale)/2;oy=(canvas.height-map.height*scale)/2;draw();
-}
-function resize(){const box=canvas.parentElement.getBoundingClientRect();canvas.width=box.width;canvas.height=box.height;fit();draw();}
-new ResizeObserver(resize).observe(canvas.parentElement);
-document.querySelector('#fit').onclick=fit;
-function localWorld(x,y){const a=map.origin.yaw,c=Math.cos(a),s=Math.sin(a);return{x:map.origin.x+c*x-s*y,y:map.origin.y+s*x+c*y};}
-function screenToWorld(p){return localWorld((p.x-ox)/scale*map.resolution,(map.height-(p.y-oy)/scale)*map.resolution);}
-function worldToScreen(p){const dx=p.x-map.origin.x,dy=p.y-map.origin.y,a=map.origin.yaw;return{x:ox+(Math.cos(a)*dx+Math.sin(a)*dy)/map.resolution*scale,y:oy+(map.height-(-Math.sin(a)*dx+Math.cos(a)*dy)/map.resolution)*scale};}
-function arrow(p,heading,color,label){
-  const q=worldToScreen(p),a=heading-map.origin.yaw;
-  ctx.save();ctx.translate(q.x,q.y);ctx.rotate(-a);ctx.fillStyle=color;ctx.strokeStyle='#101723';ctx.lineWidth=2;
-  ctx.beginPath();ctx.moveTo(15,0);ctx.lineTo(-10,-9);ctx.lineTo(-6,0);ctx.lineTo(-10,9);ctx.closePath();ctx.fill();ctx.stroke();ctx.restore();
-  ctx.fillStyle=color;ctx.font='bold 14px system-ui';ctx.fillText(label,q.x+14,q.y-14);
-}
-function flag(p,color){
-  const q=worldToScreen(p);ctx.save();ctx.strokeStyle=ctx.fillStyle=color;ctx.lineWidth=2;
-  ctx.beginPath();ctx.moveTo(q.x,q.y);ctx.lineTo(q.x,q.y-22);ctx.stroke();
-  ctx.beginPath();ctx.moveTo(q.x,q.y-22);ctx.lineTo(q.x+14,q.y-17);ctx.lineTo(q.x,q.y-12);ctx.closePath();ctx.fill();
-  ctx.beginPath();ctx.arc(q.x,q.y,3,0,Math.PI*2);ctx.fill();ctx.restore();
-}
-const ACTIVE=['accepted','executing','canceling'];
-function draw(){
-  ctx.clearRect(0,0,canvas.width,canvas.height);if(!map||!bitmap)return;
-  ctx.imageSmoothingEnabled=false;ctx.drawImage(bitmap,ox,oy,map.width*scale,map.height*scale);
-  for(const robot of states){
-    if(!connected||!robot.online||!robot.map_matches)continue;
-    if(robot.nav.target&&ACTIVE.includes(robot.nav.state))flag(robot.nav.target,colors[robot.id]);
-    ctx.strokeStyle=colors[robot.id];ctx.lineWidth=2;ctx.beginPath();
-    robot.path.forEach((p,i)=>{const q=worldToScreen(p);i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y)});ctx.stroke();
-    if(robot.pose)arrow(robot.pose,robot.pose.yaw,colors[robot.id],robot.id);
-  }
-  if(drag){const p=screenToWorld(drag.start),q=screenToWorld(drag.end);arrow(p,Math.atan2(q.y-p.y,q.x-p.x),colors[drag.robot],'설정');}
-}
-function installMap(data){
-  map=data.map;mapId=data.id;if(!map)return;
-  bitmap=document.createElement('canvas');bitmap.width=map.width;bitmap.height=map.height;
-  const bctx=bitmap.getContext('2d'),image=bctx.createImageData(map.width,map.height);
-  for(let y=0;y<map.height;y++)for(let x=0;x<map.width;x++){
-    const v=map.data[y*map.width+x],i=((map.height-1-y)*map.width+x)*4,g=v<0?133:Math.round(255*(1-v/100));
-    image.data[i]=image.data[i+1]=image.data[i+2]=g;image.data[i+3]=255;
-  }
-  bctx.putImageData(image,0,0);document.querySelector('#empty').hidden=true;
-  document.querySelector('#mapInfo').textContent=`공통 지도 · ${map.width} × ${map.height} · ${map.resolution} m/셀`;fit();
-}
-for(const id of ['robot1','robot2']){
-  const button=document.createElement('button');button.className='robot';button.style.setProperty('--color',colors[id]);button.id=id;
-  button.onclick=()=>{selected=id;drag=null;renderCards();draw();};document.querySelector('#robots').append(button);
-}
-const STATE_EN={idle:'IDLE',accepted:'ACCEPTED',executing:'EXECUTING',canceling:'CANCELING',succeeded:'SUCCEEDED',canceled:'CANCELED',aborted:'ABORTED'};
-const secs=s=>s<60?`${Math.round(s)}초`:`${Math.floor(s/60)}분 ${Math.round(s%60)}초`;
-function navLines(n){
-  const f=n.feedback,lines=[],rec=f&&f.recoveries?` · 복구 ${f.recoveries}회`:'';
-  if(f&&ACTIVE.includes(n.state))lines.push(`남은 거리 ${f.distance.toFixed(2)} m`+(f.remaining>0?` · 약 ${secs(f.remaining)} 남음`:'')+` · ${secs(f.elapsed)} 경과`+rec);
-  if(f&&n.state==='succeeded')lines.push(`${secs(f.elapsed)} 걸림`+rec);
-  if(n.state==='aborted')lines.push('이유: '+(n.error||'모름 (대시보드 밖에서 보낸 목표)')+rec);
-  if(n.target&&n.state!=='idle')lines.push(`목적지 x ${n.target.x.toFixed(2)} · y ${n.target.y.toFixed(2)}`);
-  return lines;
-}
-function renderCards(){
-  for(const id of ['robot1','robot2']){
-    const r=states.find(r=>r.id===id),el=document.getElementById(id);el.classList.toggle('selected',id===selected);el.setAttribute('aria-pressed',id===selected);
-    let badge=['offline','서버 연결 대기'],lines=[];
-    if(connected&&r){
-      badge=!r.online?['offline','로봇 odom 수신 끊김']:!r.map_matches?['offline','공통 지도 대기 / 불일치']:!r.pose?['offline','초기 위치 / TF 대기']:[r.nav.state,r.nav.label];
-      if(r.pose)lines=[`x ${r.pose.x.toFixed(2)} · y ${r.pose.y.toFixed(2)} · ${(r.pose.yaw*180/Math.PI).toFixed(0)}°`,...navLines(r.nav)];}
-    el.replaceChildren();const title=document.createElement('strong');title.textContent=`${id} · domain ${r?r.domain:'…'}`;
-    const b=document.createElement('span');b.className='badge '+badge[0];b.textContent=badge[1]+(STATE_EN[badge[0]]?' · '+STATE_EN[badge[0]]:'');
-    el.append(title,b);
-    for(const text of lines){const line=document.createElement('small');line.textContent=text;el.append(line);}
-  }
-  document.querySelector('#cancel').disabled=busy||!connected;
-  document.querySelector('#cancelAll').disabled=busy||!connected;
-}
-async function request(url,options={}){
-  const response=await fetch(url,{...options,signal:AbortSignal.timeout(8000)}),body=await response.json();
-  if(!response.ok)throw Error(body.error||'요청 실패');return body;
-}
-async function command(id,action,body){return request(`/api/robots/${id}/${action}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});}
-async function act(ids,action,body={}){
-  busy=true;renderCards();message('요청 중…');
-  const results=await Promise.all(ids.map(async id=>{try{return `${id}: ${(await command(id,action,body)).message}`;}catch(e){return `${id}: ${e.message}`;}}));
-  message(results.join('\n'));busy=false;renderCards();
-}
-document.querySelector('#cancel').onclick=()=>act([selected],'stop');
-document.querySelector('#cancelAll').onclick=()=>act(['robot1','robot2'],'stop');
-function point(e){const r=canvas.getBoundingClientRect();return{x:(e.clientX-r.left)*canvas.width/r.width,y:(e.clientY-r.top)*canvas.height/r.height};}
-canvas.onpointerdown=e=>{
-  if(!map||busy||!connected||e.button!==0)return;
-  const r=states.find(r=>r.id===selected);if(!r||!r.map_matches){message('선택한 로봇의 공통 지도 수신을 기다리세요.');return;}
-  const p=point(e);if(p.x<ox||p.y<oy||p.x>ox+map.width*scale||p.y>oy+map.height*scale)return;
-  drag={start:p,end:p,robot:selected,mode:document.querySelector('#mode').value};canvas.setPointerCapture(e.pointerId);draw();
+'use strict';
+// ─────────────── 상수·색 ───────────────
+const IDS = ['robot1', 'robot2'];
+const COLOR = {robot1: '#52b7ff', robot2: '#ffaf60'};
+const NUM = {robot1: '1', robot2: '2'};
+const CIRCLED = {robot1: '①', robot2: '②'};       // 글자로만 쓰는 곳(스크린리더 요약)
+const POLL_MS = 500, TIMEOUT_MS = 8000;
+const FRESH_S = 1.5, LOST_S = 4;                    // 요청 하나가 1.5초 넘게 걸리면 느림, 4초 넘으면 끊김
+const OFFLINE_POLLS = 3;                            // 로봇 끊김 알림은 3번 연속(≈1.5초)부터 (Wi-Fi 출렁임 방지)
+const LOG_MAX = 50;
+const MARKER_R = 11, MARKER_R_SEL = 13, WEDGE = 10, HIT_R = 18;
+const CLICK_PX = 8;                                 // 이보다(화면 px) 덜 끌면 클릭(현재 방향 유지)
+const FLOOR = [230, 235, 241], WALL = [21, 27, 36], UNKNOWN = [44, 55, 71], UNKNOWN_FAR = [30, 40, 54];
+const DARK = '#0e141d', RED = '#d92d43', TAU = Math.PI * 2;
+const FONT = "system-ui, 'Noto Sans KR', 'Noto Sans CJK KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif";
+const CLOCK_SKEW_S = 0.5;   // 로봇 시계 차이가 이보다 크면 경고(초)
+const ACTIVE = ['accepted', 'executing', 'canceling'];
+const ACTION_KO = {initialpose: '초기 위치', goal: '목적지', stop: '이동 취소'};
+const TOOL_TITLE = {initialpose: 'RViz의 2D Pose Estimate와 같아요 · P', goal: 'RViz의 Nav2 Goal과 같아요 · G'};
+const WARN = '⚠\uFE0E', PLAY = '▶\uFE0E';   // \uFE0E: 컬러 이모지로 바뀌지 않게
+// 상태 글자는 여기 한 곳에서만 정한다 (카드·도구줄·지도 라벨·기록이 같이 쓴다)
+const NAV = {
+  idle:      {ko: '대기',      en: 'IDLE',      glyph: '○',  tone: 'grey',     short: '대기'},
+  accepted:  {ko: '목표 수락', en: 'ACCEPTED',  glyph: '◐',  tone: 'blue-o',   short: '수락'},
+  executing: {ko: '이동 중',   en: 'EXECUTING', glyph: PLAY, tone: 'blue',     short: '이동 중'},
+  canceling: {ko: '취소 중',   en: 'CANCELING', glyph: '■…', tone: 'grey',     short: '취소 중'},
+  succeeded: {ko: '도착',      en: 'SUCCEEDED', glyph: '✓',  tone: 'green',    short: '도착'},
+  canceled:  {ko: '취소됨',    en: 'CANCELED',  glyph: '■',  tone: 'greyfill', short: '취소됨'},
+  aborted:   {ko: '이동 실패', en: 'ABORTED',   glyph: WARN, tone: 'red',      short: '실패'},
 };
-canvas.onpointermove=e=>{if(drag){drag.end=point(e);draw();}};
-canvas.onpointerup=e=>{
-  if(!drag)return;const d=drag;drag=null;
-  const p=screenToWorld(d.start),q=screenToWorld(point(e));draw();
-  // A click without a direction drag keeps the current heading if known.
-  const r=states.find(r=>r.id===d.robot),heading=Math.hypot(q.x-p.x,q.y-p.y)>.02?Math.atan2(q.y-p.y,q.x-p.x):(r?.pose?.yaw||0);
-  act([d.robot],d.mode,{...p,yaw:heading});
+const TONE_TEXT = {grey: 'st-grey', dash: 'st-grey', greyfill: 'st-grey', 'blue-o': 'st-blue', blue: 'st-blue',
+  green: 'st-green', red: 'st-red', 'amber-o': 'st-amber'};
+// 실패했을 때 '해 볼 것'. 백엔드가 보낸 번호·코드로만 고른다 (오류 글자를 거꾸로 읽지 않는다. 없으면 안 붙인다)
+// Nav2 NavigateToPose 결과 코드 (/api/state robots[].nav.error_code)
+const TRY_CODE = {104: '막은 것(다른 로봇?)을 치우고 다시', 105: '막은 것(다른 로봇?)을 치우고 다시', 106: '막은 것(다른 로봇?)을 치우고 다시',
+  204: '벽 위나 지도 밖 — 바닥 안쪽을 고르세요', 206: '벽 위나 지도 밖 — 바닥 안쪽을 고르세요',
+  208: '갈 길이 없어요 — 좁은 문이 막혔거나 벽에 너무 붙음', 102: '로봇 연결·TF 확인 후 위치 다시', 202: '로봇 연결·TF 확인 후 위치 다시'};
+// 요청 실패 코드 (POST 오류 응답의 code)
+const TRY_REQ = {amcl_not_ready: '10초 뒤 다시', no_pose: '↗ 초기 위치를 먼저', nav2_not_ready: '잠시 뒤 다시 (Nav2가 켜지는 중)',
+  goal_rejected: '벽 위나 지도 밖 — 바닥 안쪽을 고르세요', map_mismatch: '두 로봇을 같은 map 파일로 띄웠는지 확인'};
+// 도구가 막힌 이유
+const WHY = {server: '서버 연결 끊김', map: '지도 수신 대기', mismatch: '지도 불일치 — 두 로봇이 같은 map 파일인지 확인',
+  offline: '로봇 연결 끊김', pose: '먼저 초기 위치를 찍으세요 (P)', nav: 'Nav2 준비 안 됨', busy: '앞 요청 처리 중…'};
+
+// ─────────────── 상태 ───────────────
+let robots = [];                                    // 마지막 /api/state 의 robots
+let map = null, mapId = null, bitmap = null, known = null;   // known: 알려진 칸 범위(칸 단위)
+const mapLoad = {busy: false, fails: 0, retryAt: 0, error: ''};   // /api/map 받기 (연결 상태와 따로)
+let scale = 1, ox = 0, oy = 0, cssW = 0, cssH = 0, dpr = 1;  // 지도 → 화면(CSS px)
+let selected = 'robot1';
+let tool = null;          // 켜 둔 도구 {robot, kind: 'initialpose'|'goal'} — 없으면 '보기'
+let drag = null;          // 끌고 있는 중 {robot, kind, start, end}
+let tap = null;           // 보기 상태에서 누른 곳 {x, y} (클릭 판정용)
+let coordPreview = null;  // 좌표 입력 미리보기 {x, y, yaw}
+let tempHint = null;      // 잠깐 띄우는 안내 {robot, text, until}
+let openIssues = [];
+let summaryAt = 0, shortcutsOn = true;
+const pending = {robot1: null, robot2: null};       // 로봇별 요청 대기 {action, target} (다른 로봇은 막지 않는다)
+const stopPending = {robot1: 0, robot2: 0};
+const sentPose = {robot1: null, robot2: null};      // 방금 보낸 초기 위치 고리 {pose, until}
+// inflightSince: 지금 진행 중인 /api/state 요청을 시작한 시각 (없으면 0). 끊김은 '실제 요청이 늦거나 실패할 때'만 판단한다
+const conn = {everOk: false, firstFailed: false, failing: false, lastOk: 0, state: 'connecting', lostEpisode: 0, inflightSince: 0};
+let pollTimer = 0, lastTick = Date.now();
+const acks = new Set(), announced = new Set();
+const track = {};
+for (const id of IDS) track[id] = {
+  seenOnline: false, offlinePolls: 0, offlineSince: 0, episode: 0, lastNav: 'idle', navBeforeDrop: 'idle',
+  lastPose: null, lastPoseAt: 0, navKey: undefined, goalMax: {id: null, max: 0}, arrivedAt: {}, result: null,
 };
-canvas.onpointercancel=()=>{drag=null;draw();};
-// 목표 상태가 바뀔 때마다 한 줄씩 남긴다(처음 받은 상태는 기록하지 않는다).
-const seen={},events=[];
-function logEvents(){
-  for(const r of states){
-    const n=r.nav,key=`${n.id}:${n.state}`,prev=seen[r.id];seen[r.id]=key;
-    if(prev===undefined||prev===key||n.state==='idle')continue;
-    let text=`${r.id} ${n.label} · ${STATE_EN[n.state]}`;
-    if(n.state==='succeeded'&&n.feedback)text+=` (${secs(n.feedback.elapsed)})`;
-    if(n.state==='aborted')text+=` — ${n.error||'이유 모름'}`;
-    events.unshift({time:new Date().toLocaleTimeString('ko-KR',{hour12:false}),text,state:n.state});events.length=Math.min(events.length,12);
+
+// ─────────────── 작은 도우미 ───────────────
+const $ = s => document.querySelector(s);
+const robot = id => robots.find(r => r.id === id);
+const xy = p => `${p.x.toFixed(2)}, ${p.y.toFixed(2)}`;
+const deg = yaw => Math.round(yaw * 180 / Math.PI);
+// 먼저 초 단위로 반올림하고 나눈다 (59.6초 → '1분 0초', '60초'나 '1분 60초'가 되지 않게)
+const secs = s => { const t = Math.round(s); return t < 60 ? `${t}초` : `${Math.floor(t / 60)}분 ${t % 60}초`; };
+const since = t => Math.max(0, Math.round((Date.now() - t) / 1000));
+const pad2 = n => String(n).padStart(2, '0');
+const hhmmss = (d = new Date()) => `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+const serverOk = () => conn.state === 'fresh' || conn.state === 'slow';
+const wideMQ = matchMedia('(min-width: 1100px) and (min-height: 620px)');   // 앱 모드 (CSS와 같은 조건)
+const smooth = () => matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+function setText(el, text) { if (el.textContent !== text) el.textContent = text; }
+function setAttr(el, name, value) {
+  if (value == null) { if (el.hasAttribute(name)) el.removeAttribute(name); }
+  else if (el.getAttribute(name) !== String(value)) el.setAttribute(name, value);
+}
+function show(el, on) { if (el.hidden === !!on) el.hidden = !on; }
+function setClass(el, cls) { if (el.className !== cls) el.className = cls; }
+function makeDisc(id) {
+  const d = document.createElement('span');
+  d.className = 'disc'; d.style.setProperty('--rc', COLOR[id]); d.textContent = NUM[id]; d.setAttribute('aria-hidden', 'true');
+  const name = document.createElement('span'); name.className = 'sr-only'; name.textContent = id + ' ';
+  return [d, name];
+}
+// 램프 견본 색: 백엔드가 보낸 lamp.rgb(0~1). LED 세기는 빼고 색만 보인다(가장 센 채널 = 1).
+// rgb가 없으면(예: 새로 띄우기 전의 관제 서버) 견본 없이 글자만 보인다
+function lampColor(rgb) {
+  if (!Array.isArray(rgb) || rgb.length !== 3 || !rgb.every(Number.isFinite)) return null;
+  const top = Math.max(...rgb);
+  if (top <= 0) return null;
+  const c = rgb.map(v => Math.round(Math.max(0, v) / top * 255));
+  return {css: `rgb(${c.join(', ')})`, white: Math.min(...c) > 215};
+}
+
+// ─────────────── 화면 요소 만들기 (한 번만 만들고 이후에는 글자·속성만 바꾼다) ───────────────
+const canvas = $('#map'), ctx = canvas.getContext('2d'), mapBox = $('#mapBox');
+const ui = {};
+for (const id of IDS) {
+  const group = $('#tplGroup').content.firstElementChild.cloneNode(true);
+  const card = $('#tplCard').content.firstElementChild.cloneNode(true);
+  const el = {group, card};
+  for (const n of [...group.querySelectorAll('[data-el]'), ...card.querySelectorAll('[data-el]')]) el[n.dataset.el] = n;
+  for (const box of [group, card]) box.style.setProperty('--rc', COLOR[id]);
+  group.id = 'group-' + id; group.setAttribute('aria-label', id + ' 도구');
+  card.id = 'card-' + id; card.setAttribute('aria-labelledby', 'name-' + id); el.name.id = 'name-' + id;
+  el.chipDisc.textContent = el.cardDisc.textContent = NUM[id];
+  el.chipName.textContent = el.cardName.textContent = id;
+  el.chip.setAttribute('aria-keyshortcuts', NUM[id]);
+  el.cancel.setAttribute('aria-label', `${id} 이동 취소 — Nav2 목표만, 비상 정지 아님`);
+  el.cancel.title = '이 로봇의 Nav2 목표를 취소합니다 (X = 선택한 로봇). 비상 정지가 아니에요.';
+  $('#tools').insertBefore(group, $('.tools-end'));
+  if (id === 'robot1') {
+    const sep = document.createElement('span'); sep.className = 'tsep'; sep.setAttribute('aria-hidden', 'true');
+    $('#tools').insertBefore(sep, $('.tools-end'));
   }
-  if(!events.length)return;
-  document.querySelector('#events').replaceChildren(...events.map(e=>{
-    const li=document.createElement('li'),t=document.createElement('time');li.className=e.state;t.textContent=e.time;li.append(t,e.text);return li;}));
+  $('#main').insertBefore(card, $('#logBox'));
+  el.chip.onclick = () => pick(id);
+  el.name.onclick = () => select(id);
+  el.toolPose.onclick = () => arm(id, 'initialpose');
+  el.toolGoal.onclick = () => arm(id, 'goal');
+  el.cancel.onclick = () => send(id, 'stop');
+  el.resend.onclick = () => resend(id);
+  el.setpose.onclick = () => armSetup(id);
+  el.ack.onclick = () => ackRobot(id);
+  el.lampFail.onclick = () => openHelp('#helpLamp');
+  ui[id] = el;
 }
-async function poll(){
-  try{const data=await request('/api/state');connected=true;
-    // nav가 없는 예전 서버와도 화면이 깨지지 않게 한다
-    states=data.robots.map(r=>({...r,nav:r.nav||{id:null,state:'idle',label:r.status||'대기',target:null,feedback:null,error:null}}));logEvents();
-    if(data.map_id&&data.map_id!==mapId)installMap(await request('/api/map'));
-  }catch(e){connected=false;drag=null;message('관제 서버 연결 끊김: '+e.message);}
-  renderCards();draw();setTimeout(poll,500);
+
+// ─────────────── view(): 로봇 하나의 상태를 한 곳에서 계산 ───────────────
+// 우선순위: 서버 대기 → 로봇 끊김 → 지도 없음 → 지도 불일치 → 위치 없음 → Nav2 목표 상태
+function view(id) {
+  const r = robot(id), t = track[id];
+  if (!r) return {key: 'connecting', ko: '서버 연결 대기', en: 'CONNECTING', glyph: '…', tone: 'grey', short: '연결 대기',
+    detail: conn.firstFailed ? '관제 서버에 연결할 수 없어요 — launch가 켜져 있는지 확인하세요' : '관제 서버에서 첫 상태를 기다리는 중', pos: ''};
+  if (!r.online) {
+    // 목표 이력이 없고 이번 세션에 연결된 적도 없으면 조용히(쓰지 않는 로봇). 그 밖에는 빨간 '연결 끊김'
+    const last = r.nav.id && r.nav.state !== 'idle' ? NAV[r.nav.state] : null;
+    if (!t.seenOnline && !last) return {key: 'offline0', ko: '연결 안 됨', en: 'OFFLINE', glyph: '⊘', tone: 'dash', short: '끊김',
+      detail: 'odom이 안 들어와요 — 로봇 bringup(시뮬이면 sim.launch.py)이 켜져 있는지 확인', pos: ''};
+    const lastGoal = last ? `마지막 목표: ${last.ko}` + (r.nav.state === 'aborted' && r.nav.error ? ` — ${r.nav.error}` : '') : '';
+    const lastSeen = t.lastPose ? `마지막 위치 ${xy(t.lastPose)} · ${since(t.lastPoseAt)}초 전` : '';
+    return {key: 'offline', ko: '연결 끊김', en: 'OFFLINE', extra: t.seenOnline ? `· ${since(t.offlineSince)}초째` : '',
+      glyph: WARN, tone: 'red', short: '끊김', detail: 'odom 2초 넘게 없음 — 전원·Wi-Fi·bringup 확인 (시뮬이면 일시정지인지 확인)',
+      pos: [lastSeen, lastGoal].filter(Boolean).join(' · ')};
+  }
+  if (!r.map_id) return {key: 'nomap', ko: '지도 없음', en: 'NO MAP', glyph: '≠', tone: 'amber-o', short: '지도 없음',
+    detail: '이 로봇의 /map을 아직 못 받았어요 — map_server 확인', pos: ''};
+  if (!r.map_matches) return {key: 'mismatch', ko: '지도 불일치', en: 'MAP MISMATCH', glyph: '≠', tone: 'amber-o', short: '불일치',
+    detail: '공통 지도와 달라요 — 두 로봇을 같은 map 파일로 띄웠는지 확인', pos: ''};
+  // 위치가 없으면 Nav2도 준비되지 않는다(costmap이 map→base_link TF를 기다림) → 따로 알리지 않고 한 문장으로
+  if (!r.pose) return {key: 'nopose', ko: '초기 위치 필요', en: 'NO POSE', glyph: '?', tone: 'amber-o', short: '위치 필요',
+    detail: r.nav_ready === false ? '초기 위치 / TF 대기 — 지도에서 위치를 찍으세요. 찍으면 Nav2가 준비돼요'
+      : '초기 위치 / TF 대기 — 지도에서 위치를 찍으세요 (이미 찍었다면 TF 대기 중)', pos: ''};
+  const n = r.nav, f = n.feedback, pose = r.pose;
+  const s = NAV[n.state] || {ko: n.label || n.state, en: String(n.state).toUpperCase(), glyph: '•', tone: 'grey', short: n.label || n.state};
+  const rec = f && f.recoveries ? ` · 복구 ${f.recoveries}회` : '';
+  const where = n.target ? `목적지 ${xy(n.target)}` : '목적지를 몰라요 — 대시보드 밖(RViz 등)에서 보낸 목표';
+  let detail;
+  switch (n.state) {
+    case 'executing':
+      detail = f ? `남은 ${f.distance.toFixed(2)} m` + (f.remaining > 0 ? ` · 약 ${secs(f.remaining)} 남음` : '') + ` · ${secs(f.elapsed)} 경과` : where;
+      break;
+    case 'accepted': detail = where; break;
+    case 'canceling': detail = n.target ? `${where} · 취소 처리 중` : where; break;
+    case 'canceled': detail = n.target ? `${where} · 취소됨` : where; break;
+    case 'succeeded':
+      detail = (f ? `${secs(f.elapsed)} 걸림${rec}` : '도착했어요') + (t.arrivedAt[n.id] ? ` · ${t.arrivedAt[n.id]} 도착` : '');
+      break;
+    case 'aborted': {
+      detail = n.error ? `이유: ${n.error}${rec}`
+        : n.target ? `이유를 아직 못 받았어요${rec}` : `이유 모름 — 대시보드 밖에서 보낸 목표${rec}`;
+      const tip = TRY_CODE[n.error_code];
+      if (tip) detail += ` → 해 볼 것: ${tip}`;
+      break;
+    }
+    default: detail = `위치 ${xy(pose)} · ${deg(pose.yaw)}°`;
+  }
+  const pos = n.state === 'idle' ? '' : `위치 ${xy(pose)} · ${deg(pose.yaw)}°` + (n.target ? ` → 목적지 ${xy(n.target)}` : '');
+  return {key: n.state, ...s, detail, pos};
 }
-renderCards();poll();
+
+// 도구를 쓸 수 없는 이유 (없으면 null). 초기 위치는 백엔드처럼 로봇 연결을 요구하지 않는다.
+function toolBlock(id, kind) {
+  if (!serverOk()) return WHY.server;
+  if (!map) return WHY.map;
+  const r = robot(id);
+  if (!r) return WHY.server;
+  if (kind === 'goal' && !r.online) return WHY.offline;
+  if (!r.map_id) return WHY.map;
+  if (!r.map_matches) return WHY.mismatch;
+  if (kind === 'goal' && !r.pose) return WHY.pose;
+  if (kind === 'goal' && r.nav_ready === false) return WHY.nav;
+  if (pending[id]) return WHY.busy;
+  return null;
+}
+
+// 알림 후보: 심각한 순서 (서버 끊김 > 로봇 끊김 > 이동 실패 > 지도 불일치 > 복구 3회 이상)
+function issues() {
+  const out = [];
+  if (conn.state === 'lost' && conn.everOk)
+    out.push({key: 'server:' + conn.lostEpisode, rank: 0, crit: true, robot: null,
+      text: `관제 서버 연결 끊김 · ${since(conn.lastOk)}초째 — 재시도 중`});
+  for (const id of IDS) {
+    const r = robot(id), t = track[id];
+    if (!r) continue;
+    // moving: 끊길 때 이동 중이었다 → 실물이면 사람이 가서 멈춰야 한다 (두 로봇 알림을 합칠 때도 이 말은 남긴다)
+    if (!r.online && t.seenOnline && t.offlinePolls >= OFFLINE_POLLS) {
+      const moving = ACTIVE.includes(t.navBeforeDrop);
+      out.push({key: `${id}:drop:${t.episode}`, rank: 1, crit: true, moving, robot: id, text: moving
+        ? '연결 끊김 — 이동 중이었어요. 로봇이 마지막 속도로 계속 움직일 수 있어요. 실물이면 직접 가서 멈추세요.'
+        : `연결 끊김 · ${since(t.offlineSince)}초째 — 전원·Wi-Fi·bringup 확인`});
+    } else if (!r.online && r.nav.id && r.nav.state !== 'idle' && t.offlinePolls >= OFFLINE_POLLS) {
+      // 페이지를 열 때 이미 끊겨 있던 로봇인데 목표 이력이 있다: 카드와 같은 말(연결 끊김 + 마지막 목표)을 한다
+      const moving = ACTIVE.includes(r.nav.state), last = NAV[r.nav.state] ? NAV[r.nav.state].ko : r.nav.label;
+      out.push({key: `${id}:drop0:${r.nav.id}`, rank: 1, crit: moving, moving, robot: id, text: moving
+        ? '연결 끊김 — 마지막 목표가 이동 중이었어요. 실물이면 로봇이 멈췄는지 직접 확인하세요.'
+        : `연결 끊김 — 마지막 목표: ${last}` + (r.nav.state === 'aborted' && r.nav.error ? ` (${r.nav.error})` : '')});
+    }
+    // 이동 실패 알림은 연결된 로봇만 (끊긴 로봇은 위 '연결 끊김' 한 가지로 말한다)
+    if (r.online && r.nav.state === 'aborted')
+      out.push({key: `${id}:abort:${r.nav.id}`, rank: 2, crit: true, robot: id, text: `이동 실패 — ${r.nav.error || '이유 모름'}`});
+    if (r.online && r.map_id && !r.map_matches)
+      out.push({key: `${id}:mismatch:${r.map_id}`, rank: 3, crit: false, robot: id, text: '지도 불일치 — 두 로봇을 같은 map 파일로 띄웠는지 확인'});
+    // 로봇 시계가 PC와 다르면 Nav2가 변환에 실패한다(멀리 있는 목적지인데 0초 만에 '도착', 경로만 그리고 안 움직임 등)
+    if (r.online && typeof r.clock_skew === 'number' && Math.abs(r.clock_skew) > CLOCK_SKEW_S)
+      out.push({key: `${id}:skew`, rank: 2, crit: true, robot: id,
+        text: `로봇 시계가 PC와 ${Math.abs(r.clock_skew).toFixed(1)}초 달라요 — scripts/sync_robot_clock.sh로 맞춘 뒤 관제를 다시 켜세요`});
+    const rec = r.nav.feedback ? r.nav.feedback.recoveries : 0;
+    if (r.online && r.nav.state === 'executing' && rec >= 3)
+      out.push({key: `${id}:rec:${r.nav.id}`, rank: 4, crit: false, robot: id, text: `복구 ${rec}회 — 막혀 있을 수 있어요`});
+  }
+  return out.filter(i => !acks.has(i.key)).sort((a, b) => a.rank - b.rank);
+}
+
+// ─────────────── 지도 설치·맞춤·그리기 ───────────────
+function localWorld(x, y) {
+  const a = map.origin.yaw, c = Math.cos(a), s = Math.sin(a);
+  return {x: map.origin.x + c * x - s * y, y: map.origin.y + s * x + c * y};
+}
+function worldToCell(p) {   // 지도 칸 좌표 (y는 아래 행부터, 원점 yaw 반영)
+  const dx = p.x - map.origin.x, dy = p.y - map.origin.y, a = map.origin.yaw;
+  return {x: (Math.cos(a) * dx + Math.sin(a) * dy) / map.resolution, y: (-Math.sin(a) * dx + Math.cos(a) * dy) / map.resolution};
+}
+function worldToScreen(p) { const c = worldToCell(p); return {x: ox + c.x * scale, y: oy + (map.height - c.y) * scale}; }
+function screenToWorld(p) { return localWorld((p.x - ox) / scale * map.resolution, (map.height - (p.y - oy) / scale) * map.resolution); }
+const screenAngle = yaw => -(yaw - map.origin.yaw);   // 캔버스는 y가 아래로
+function insideMap(p) { return map && p.x >= ox && p.y >= oy && p.x <= ox + map.width * scale && p.y <= oy + map.height * scale; }
+function point(e) { const b = canvas.getBoundingClientRect(); return {x: e.clientX - b.left, y: e.clientY - b.top}; }
+const INSET = {top: 36, bottom: 28, side: 24};   // 맞춤 여백(px): 위 = 안내 알약 자리, 아래 = 축척 막대 자리
+
+function installMap(data) {
+  const first = mapId === null;
+  map = data.map; mapId = data.id;
+  if (!map) return;
+  bitmap = document.createElement('canvas'); bitmap.width = map.width; bitmap.height = map.height;
+  const bctx = bitmap.getContext('2d'), image = bctx.createImageData(map.width, map.height);
+  // 알려진 칸(-1이 아닌 칸)의 범위. 5% 미만(SLAM 시작 등)이면 지도 전체를 맞춘다
+  let x0 = Infinity, x1 = -1, y0 = Infinity, y1 = -1, count = 0;
+  map.data.forEach((v, i) => {
+    if (v < 0) return;
+    const x = i % map.width, y = Math.floor(i / map.width);
+    count++; x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+  });
+  known = count >= map.width * map.height * .05 ? {x0, x1: x1 + 1, y0, y1: y1 + 1} : null;
+  for (let y = 0; y < map.height; y++) for (let x = 0; x < map.width; x++) {
+    const v = map.data[y * map.width + x], i = ((map.height - 1 - y) * map.width + x) * 4;
+    // RViz처럼 밝은 바닥·어두운 벽, 미탐색은 뒤로 물러나는 청회색 (알려진 범위 밖은 더 어둡게)
+    const far = known && (x < known.x0 || x >= known.x1 || y < known.y0 || y >= known.y1);
+    const c = v < 0 ? (far ? UNKNOWN_FAR : UNKNOWN) : FLOOR.map((f, k) => Math.round(f + (WALL[k] - f) * Math.min(v, 100) / 100));
+    image.data[i] = c[0]; image.data[i + 1] = c[1]; image.data[i + 2] = c[2]; image.data[i + 3] = 255;
+  }
+  bctx.putImageData(image, 0, 0);
+  const box = known || {x0: 0, x1: map.width, y0: 0, y1: map.height}, cm = Math.round(map.resolution * 1000) / 10;
+  setText($('#mapInfo'), `지도 ${((box.x1 - box.x0) * map.resolution).toFixed(1)} × ${((box.y1 - box.y0) * map.resolution).toFixed(1)} m · ${cm} cm/셀`);
+  fit();
+  if (!first) { showTemp(null, '새 지도를 받았어요 — 화면을 다시 맞췄어요', 4000); log(null, '▦', '새 지도 적용', 'info'); }
+}
+
+// 맞춤: 알려진 영역 + 로봇·목적지·끌기 시작점을 화면 여백 안에. 폴링 때는 부르지 않는다(화면이 튀지 않게).
+function fit() {
+  if (!map || !cssW) return;
+  const box = known ? {...known} : {x0: 0, x1: map.width, y0: 0, y1: map.height};
+  const padCells = .1 / map.resolution, pts = [];
+  for (const r of robots) {
+    if (!r.online || !r.map_matches) continue;
+    if (r.pose) pts.push(r.pose);
+    if (r.nav.target && (ACTIVE.includes(r.nav.state) || r.nav.state === 'aborted')) pts.push(r.nav.target);
+  }
+  if (drag) pts.push(screenToWorld(drag.start));
+  for (const p of pts) {
+    const c = worldToCell(p);
+    // 지도 밖 좌표(오타로 보낸 목적지 등)는 맞춤에 넣지 않는다 — 지도가 한없이 작아지지 않게
+    if (c.x < -padCells || c.y < -padCells || c.x > map.width + padCells || c.y > map.height + padCells) continue;
+    box.x0 = Math.min(box.x0, c.x - padCells); box.x1 = Math.max(box.x1, c.x + padCells);
+    box.y0 = Math.min(box.y0, c.y - padCells); box.y1 = Math.max(box.y1, c.y + padCells);
+  }
+  const aw = cssW - 2 * INSET.side, ah = cssH - INSET.top - INSET.bottom;
+  scale = Math.max(.05, Math.min(aw / (box.x1 - box.x0), ah / (box.y1 - box.y0)));
+  ox = INSET.side + (aw - (box.x1 - box.x0) * scale) / 2 - box.x0 * scale;
+  oy = INSET.top + (ah - (box.y1 - box.y0) * scale) / 2 - (map.height - box.y1) * scale;
+  draw();
+}
+function resizeCanvas() {
+  const b = mapBox.getBoundingClientRect();
+  cssW = b.width; cssH = b.height; dpr = devicePixelRatio || 1;
+  canvas.width = Math.round(cssW * dpr); canvas.height = Math.round(cssH * dpr);   // 크기를 바꾸면 캔버스는 비워진다
+  fit();   // 지도가 있으면 fit()이 한 번 그린다
+}
+new ResizeObserver(resizeCanvas).observe(mapBox);
+
+// 마지막 그림에 시간이 지나면 바뀌는 것(방금 보낸 초기 위치 고리, '몇 초 전' 라벨)이 있었나.
+// 있을 때만 0.5초 타이머가 다시 그린다. 나머지는 상태를 받거나 조작할 때 그린다
+let drawnTimed = false;
+
+// 그리기 순서: 지도 → 격자 → [문 구역 자리] → 경로 → 깃발 → 로봇(선택한 로봇이 위) → 이상 표시 → 라벨 → 유령 → 축척
+function draw() {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+  drawnTimed = false;
+  if (!map || !bitmap) return;
+  const W = map.width * scale, H = map.height * scale;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(bitmap, ox, oy, W, H);
+  ctx.strokeStyle = '#45556b'; ctx.lineWidth = 1; ctx.strokeRect(ox - .5, oy - .5, W + 1, H + 1);
+  drawGrid();
+  // [자리] 문 구역(교통 제어): 백엔드가 zones를 보내 주면 여기서 그린다. 좌표를 코드에 박지 않는다.
+  ctx.save();
+  if (conn.state === 'lost') ctx.globalAlpha = .5;     // 서버가 끊기면 마지막 모습을 흐리게 남긴다
+  const onMap = robots.filter(r => r.online && r.map_matches)
+    .sort((a, b) => (a.id === selected) - (b.id === selected));
+  for (const r of onMap) drawPath(r);
+  for (const r of onMap) {
+    if (!r.nav.target) continue;
+    if (ACTIVE.includes(r.nav.state)) drawFlag(r.id, r.nav.target, 'solid');
+    else if (r.nav.state === 'aborted') drawFlag(r.id, r.nav.target, 'failed');
+  }
+  const lastSeen = lastSeenList();
+  if (lastSeen.length) drawnTimed = true;
+  for (const s of lastSeen) ghostCircle(s.q, s.id);
+  const withPose = onMap.filter(r => r.pose);
+  for (const r of withPose) drawMarker(r);
+  resetLayout(onMap, lastSeen);
+  drawStatusLabels(withPose);          // 라벨 자리는 살아 있는 로봇 → 마지막 위치 → 유령 순서로 잡는다
+  drawLastSeenLabels(lastSeen);
+  ctx.restore();
+  drawGhosts();
+  drawScale();
+}
+
+function drawGrid() {   // 0.5 m 격자: 0.35 m 문 폭을 눈으로 가늠할 수 있게
+  const corners = [[0, 0], [map.width, 0], [0, map.height], [map.width, map.height]]
+    .map(([cx, cy]) => localWorld(cx * map.resolution, cy * map.resolution));
+  const xs = corners.map(p => p.x), ys = corners.map(p => p.y);
+  const [minX, maxX, minY, maxY] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+  ctx.save();
+  ctx.beginPath(); ctx.rect(ox, oy, map.width * scale, map.height * scale); ctx.clip();
+  ctx.strokeStyle = 'rgba(0, 0, 0, .07)'; ctx.lineWidth = 1; ctx.beginPath();
+  for (let k = Math.ceil(minX / .5); k * .5 <= maxX; k++) {
+    const a = worldToScreen({x: k * .5, y: minY}), b = worldToScreen({x: k * .5, y: maxY});
+    ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+  }
+  for (let k = Math.ceil(minY / .5); k * .5 <= maxY; k++) {
+    const a = worldToScreen({x: minX, y: k * .5}), b = worldToScreen({x: maxX, y: k * .5});
+    ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+  }
+  ctx.stroke(); ctx.restore();
+}
+
+function drawPath(r) {   // 어두운 테두리 위에 로봇 색. robot2는 점선이라 색 말고도 구분된다
+  const path = r.path || [];
+  if (path.length < 2) return;
+  const pts = path.map(worldToScreen);
+  const trace = () => { ctx.beginPath(); pts.forEach((q, i) => i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)); };
+  ctx.save();
+  if (r.id !== selected) ctx.globalAlpha *= .8;
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  trace(); ctx.strokeStyle = 'rgba(14, 20, 29, .55)'; ctx.lineWidth = 5; ctx.stroke();
+  if (r.id === 'robot2') { ctx.setLineDash([8, 5]); ctx.lineCap = 'butt'; }
+  trace(); ctx.strokeStyle = COLOR[r.id]; ctx.lineWidth = 3; ctx.stroke();
+  ctx.restore();
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+
+// 깃발: 24px 깃대 + 16x12 깃발(번호) + 도착 방향 눈금. mode: solid | failed | pending | ghost
+function drawFlag(id, t, mode) {
+  const q = worldToScreen(t), failed = mode === 'failed';
+  ctx.save(); ctx.lineCap = 'round';
+  if (t.yaw != null) {
+    const a = screenAngle(t.yaw), ex = q.x + Math.cos(a) * 12, ey = q.y + Math.sin(a) * 12;
+    ctx.beginPath(); ctx.moveTo(q.x, q.y); ctx.lineTo(ex, ey); ctx.strokeStyle = DARK; ctx.lineWidth = 4; ctx.stroke();
+    ctx.strokeStyle = failed ? RED : COLOR[id]; ctx.lineWidth = 2; ctx.stroke();
+  }
+  ctx.beginPath(); ctx.moveTo(q.x, q.y); ctx.lineTo(q.x, q.y - 24); ctx.strokeStyle = DARK; ctx.lineWidth = 2; ctx.stroke();
+  ctx.beginPath(); ctx.rect(q.x + 1, q.y - 24, 16, 12);
+  if (failed) {
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 4; ctx.stroke(); ctx.strokeStyle = RED; ctx.lineWidth = 2; ctx.stroke();
+  } else {
+    if (mode !== 'solid') ctx.globalAlpha *= .75;
+    ctx.fillStyle = COLOR[id]; ctx.fill();
+    if (mode === 'pending') ctx.setLineDash([3, 2]);
+    ctx.strokeStyle = DARK; ctx.lineWidth = 1.5; ctx.stroke(); ctx.setLineDash([]);
+  }
+  ctx.fillStyle = failed ? RED : DARK; ctx.font = `800 10px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(NUM[id], q.x + 9, q.y - 17.5);
+  if (failed) {   // 발에 빨간 ✕
+    ctx.beginPath(); ctx.moveTo(q.x - 5, q.y - 5); ctx.lineTo(q.x + 5, q.y + 5); ctx.moveTo(q.x + 5, q.y - 5); ctx.lineTo(q.x - 5, q.y + 5);
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 4.5; ctx.stroke(); ctx.strokeStyle = RED; ctx.lineWidth = 2.5; ctx.stroke();
+  } else {
+    ctx.beginPath(); ctx.arc(q.x, q.y, 3, 0, TAU); ctx.fillStyle = DARK; ctx.fill();
+  }
+  ctx.restore();
+}
+
+// 로봇 표시: 로봇 색 원 + 어두운 테두리 + 흰 바깥선 + 번호 + 흰 방향 쐐기
+function drawMarker(r) {
+  const id = r.id, sel = id === selected, rad = sel ? MARKER_R_SEL : MARKER_R, q = worldToScreen(r.pose);
+  const failed = r.nav.state === 'aborted';
+  ctx.save(); ctx.translate(q.x, q.y);
+  if (failed) { ctx.beginPath(); ctx.arc(0, 0, rad + 5, 0, TAU); ctx.strokeStyle = RED; ctx.lineWidth = 3; ctx.stroke(); }
+  if (sel) {   // 선택: 어두운 점선 고리 + 흰 테두리
+    ctx.beginPath(); ctx.arc(0, 0, rad + (failed ? 10 : 6), 0, TAU); ctx.setLineDash([4, 3]);
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 4; ctx.stroke(); ctx.strokeStyle = DARK; ctx.lineWidth = 2; ctx.stroke(); ctx.setLineDash([]);
+  }
+  ctx.save(); ctx.rotate(screenAngle(r.pose.yaw));
+  ctx.beginPath(); ctx.moveTo(rad + WEDGE, 0); ctx.lineTo(rad * .5, -rad * .8); ctx.lineTo(rad * .5, rad * .8); ctx.closePath();
+  ctx.lineJoin = 'round'; ctx.strokeStyle = DARK; ctx.lineWidth = 2; ctx.stroke(); ctx.fillStyle = '#fff'; ctx.fill();
+  ctx.restore();
+  ctx.beginPath(); ctx.arc(0, 0, rad + 1.5, 0, TAU); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.beginPath(); ctx.arc(0, 0, rad, 0, TAU); ctx.fillStyle = COLOR[id]; ctx.fill();
+  ctx.strokeStyle = DARK; ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = DARK; ctx.font = `800 12px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(NUM[id], 0, .5);
+  if (failed) {   // 오른쪽 위 빨간 '!'
+    ctx.beginPath(); ctx.arc(rad * .8, -rad * .8, 7, 0, TAU); ctx.fillStyle = RED; ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.fillStyle = '#fff'; ctx.font = `800 11px ${FONT}`; ctx.fillText('!', rad * .8, -rad * .8 + .5);
+  }
+  ctx.restore();
+}
+
+// 라벨 알약: [번호 원] + 글자. 상태 라벨(로봇 색 바탕)과 유령 라벨(어두운 바탕)에 같이 쓴다
+function labelWidth(text) { ctx.font = `700 13px ${FONT}`; return 29 + (text ? ctx.measureText(text).width + 4 : 0); }
+function drawLabel(x, y, id, text, fill, ink, border) {
+  const w = labelWidth(text), h = 22;
+  roundRect(x, y, w, h, 11); ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = border; ctx.lineWidth = 1; ctx.stroke();
+  ctx.beginPath(); ctx.arc(x + 12, y + h / 2, 8, 0, TAU); ctx.fillStyle = DARK; ctx.fill();
+  ctx.textBaseline = 'middle'; ctx.textAlign = 'center'; ctx.fillStyle = COLOR[id]; ctx.font = `800 11px ${FONT}`;
+  ctx.fillText(NUM[id], x + 12, y + h / 2 + .5);
+  if (text) { ctx.textAlign = 'left'; ctx.fillStyle = ink; ctx.font = `700 13px ${FONT}`; ctx.fillText(text, x + 25, y + h / 2 + .5); }
+}
+const overlaps = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+// ─── 라벨 자리 잡기: draw() 한 번마다 비우는 공용 목록 ───
+// 상태 라벨·마지막 위치 라벨·유령 라벨이 모두 같은 규칙(여러 자리 중 안 겹치는 첫 자리, 캔버스 안)으로 놓인다
+const layout = {placed: [], bodies: []};
+function resetLayout(onMap, lastSeen) {
+  layout.placed = []; layout.bodies = [];
+  for (const r of onMap) {
+    if (r.pose) {
+      const q = worldToScreen(r.pose), rad = (r.id === selected ? MARKER_R_SEL : MARKER_R) + 4;
+      layout.bodies.push({id: r.id, x: q.x - rad, y: q.y - rad, w: 2 * rad, h: 2 * rad});
+    }
+    const n = r.nav;   // 그려진 깃발
+    if (n.target && (ACTIVE.includes(n.state) || n.state === 'aborted')) {
+      const q = worldToScreen(n.target);
+      layout.bodies.push({id: null, x: q.x - 7, y: q.y - 26, w: 26, h: 33});
+    }
+  }
+  for (const s of lastSeen) layout.bodies.push({id: 'last:' + s.id, x: s.q.x - MARKER_R - 3, y: s.q.y - MARKER_R - 3, w: 2 * MARKER_R + 6, h: 2 * MARKER_R + 6});
+  layout.bodies.push({id: null, x: 0, y: cssH - 30, w: 250, h: 30});   // 왼쪽 아래 축척 막대
+}
+// box: 라벨을 붙일 대상의 상자, order: 시도할 자리 순서. 모두 막히면 첫 자리를 캔버스 안으로 끌어온다
+function placeLabel(box, w, h, order, ownId) {
+  const cy = box.y + box.h / 2;
+  const at = {ne: [box.x + box.w, box.y - h], se: [box.x + box.w, box.y + box.h], nw: [box.x - w, box.y - h],
+    sw: [box.x - w, box.y + box.h], e: [box.x + box.w + 4, cy - h / 2], w: [box.x - w - 4, cy - h / 2]};
+  const inside = c => c.x >= 2 && c.y >= 2 && c.x + w <= cssW - 2 && c.y + h <= cssH - 2;
+  const free = c => !layout.placed.some(p => overlaps(p, c)) && !layout.bodies.some(b => (ownId == null || b.id !== ownId) && overlaps(b, c));
+  let rect = null, moved = false;
+  for (let i = 0; i < order.length && !rect; i++) {
+    const c = {x: at[order[i]][0], y: at[order[i]][1], w, h};
+    if (inside(c) && free(c)) { rect = c; moved = i > 0; }
+  }
+  if (!rect) {
+    const [x, y] = at[order[0]];
+    rect = {x: Math.min(Math.max(2, x), cssW - 2 - w), y: Math.min(Math.max(2, y), cssH - 2 - h), w, h};
+    moved = rect.x !== x || rect.y !== y;
+  }
+  layout.placed.push(rect);
+  return {rect, moved};
+}
+function leader(q, rect) {   // 기본 자리가 아니면 대상과 라벨을 잇는 가는 선
+  const lx = Math.max(rect.x, Math.min(q.x, rect.x + rect.w)), ly = Math.max(rect.y, Math.min(q.y, rect.y + rect.h));
+  ctx.beginPath(); ctx.moveTo(q.x, q.y); ctx.lineTo(lx, ly); ctx.strokeStyle = DARK; ctx.lineWidth = 1; ctx.stroke();
+}
+const circleBox = (q, rad) => ({x: q.x - rad, y: q.y - rad, w: 2 * rad, h: 2 * rad});
+const flagBox = q => ({x: q.x - 7, y: q.y - 26, w: 26, h: 33});
+
+// 상태 라벨: 오른쪽 위 → 오른쪽 아래 → 왼쪽 위 → 왼쪽 아래 중 다른 로봇·라벨과 안 겹치는 첫 자리
+function drawStatusLabels(list) {
+  const narrow = cssW < 520;
+  for (const r of list.slice().reverse()) {   // 선택한 로봇이 먼저 자리를 잡는다
+    const v = view(r.id), text = narrow ? v.glyph : `${v.glyph} ${v.short}`;
+    const q = worldToScreen(r.pose), gap = (r.id === selected ? MARKER_R_SEL : MARKER_R) + 4;
+    const {rect, moved} = placeLabel(circleBox(q, gap), labelWidth(text), 22, ['ne', 'se', 'nw', 'sw'], r.id);
+    if (moved) leader(q, rect);
+    drawLabel(rect.x, rect.y, r.id, text, COLOR[r.id], DARK, DARK);
+  }
+}
+
+// 끊긴 로봇의 마지막 위치 (이 페이지가 기억한 값. 살아 있는 위치처럼 보이지 않게 점선 빈 원)
+function lastSeenList() {
+  const out = [];
+  for (const id of IDS) {
+    const r = robot(id), t = track[id];
+    if (!r || r.online || !t.seenOnline || !t.lastPose) continue;
+    out.push({id, q: worldToScreen(t.lastPose), at: t.lastPoseAt});
+  }
+  return out;
+}
+function drawLastSeenLabels(list) {
+  for (const s of list) {
+    const text = `마지막 위치 · ${since(s.at)}초 전`;
+    const {rect, moved} = placeLabel(circleBox(s.q, MARKER_R + 4), labelWidth(text), 22, ['ne', 'se', 'nw', 'sw'], 'last:' + s.id);
+    if (moved) leader(s.q, rect);
+    drawLabel(rect.x, rect.y, s.id, text, 'rgba(14, 20, 29, .9)', '#fff', COLOR[s.id]);
+  }
+}
+function ghostCircle(q, id, warn) {
+  ctx.save(); ctx.beginPath(); ctx.arc(q.x, q.y, MARKER_R, 0, TAU);
+  ctx.strokeStyle = warn ? RED : DARK; ctx.lineWidth = 5; ctx.stroke();
+  ctx.setLineDash([4, 3]); ctx.strokeStyle = COLOR[id]; ctx.lineWidth = 2.5; ctx.stroke(); ctx.restore();
+}
+function arrow(a, b, color) {
+  const ang = Math.atan2(b.y - a.y, b.x - a.x);
+  ctx.save(); ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.strokeStyle = DARK; ctx.lineWidth = 5; ctx.stroke();
+  ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.stroke();
+  ctx.translate(b.x, b.y); ctx.rotate(ang);
+  ctx.beginPath(); ctx.moveTo(4, 0); ctx.lineTo(-9, -7); ctx.lineTo(-9, 7); ctx.closePath();
+  ctx.fillStyle = color; ctx.fill(); ctx.strokeStyle = DARK; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.restore();
+}
+function drawTag(x, y, text, warn) {   // 커서 옆 좌표 알약 (화면 밖으로 나가지 않게)
+  ctx.font = `600 12px ${FONT}`;
+  const w = ctx.measureText(text).width + 16, h = 22;
+  if (x + w > cssW - 4) x = Math.max(4, x - w - 32);
+  if (y + h > cssH - 4) y = Math.max(4, y - h - 32);
+  roundRect(x, y, w, h, 6); ctx.fillStyle = 'rgba(14, 20, 29, .92)'; ctx.fill();
+  ctx.strokeStyle = warn ? '#ff6b6b' : '#5b6d87'; ctx.lineWidth = warn ? 2 : 1; ctx.stroke();
+  ctx.fillStyle = '#fff'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(text, x + 8, y + h / 2 + .5);
+}
+// 놓을 자리(위치나 목적지) 유령: 초기 위치 = 점선 빈 원 '여기 있음', 목적지 = 깃발 '목적지'
+function drawPlacement(id, kind, pose, label, mode, warn) {
+  const q = worldToScreen(pose), a = screenAngle(pose.yaw);
+  if (kind === 'goal') drawFlag(id, pose, mode);
+  else {
+    ghostCircle(q, id, warn);
+    ctx.save(); ctx.beginPath(); ctx.moveTo(q.x, q.y); ctx.lineTo(q.x + Math.cos(a) * (MARKER_R + 8), q.y + Math.sin(a) * (MARKER_R + 8));
+    ctx.strokeStyle = COLOR[id]; ctx.lineWidth = 2; ctx.stroke(); ctx.restore();
+  }
+  if (!label) return;
+  // 라벨은 방향 화살표의 반대쪽을 먼저 (화살표를 가리지 않게). 다른 라벨·로봇과 겹치면 다음 자리로
+  const order = Math.cos(a) > 0 ? ['w', 'nw', 'sw', 'e', 'ne', 'se'] : ['e', 'ne', 'se', 'w', 'nw', 'sw'];
+  const box = kind === 'goal' ? flagBox(q) : circleBox(q, MARKER_R + 4);
+  const {rect, moved} = placeLabel(box, labelWidth(label), 22, order, null);
+  if (moved) leader(q, rect);
+  drawLabel(rect.x, rect.y, id, label, 'rgba(14, 20, 29, .9)', '#fff', warn ? '#ff6b6b' : COLOR[id]);
+}
+function targetWarnings(pose, id) {   // 정적 지도로만 보는 경고 (최종 판단은 Nav2 costmap)
+  const out = [], c = worldToCell(pose), cx = Math.floor(c.x), cy = Math.floor(c.y);
+  if (cx < 0 || cy < 0 || cx >= map.width || cy >= map.height) out.push('지도 밖');
+  else {
+    const v = map.data[cy * map.width + cx];
+    if (v >= 65) out.push('벽 위 — Nav2가 거부할 수 있어요'); else if (v < 0) out.push('미탐색 영역');
+  }
+  const other = IDS.find(o => o !== id), ro = robot(other);
+  if (ro && ro.online && ro.map_matches) {
+    for (const p of [ro.pose, ACTIVE.includes(ro.nav.state) ? ro.nav.target : null]) {
+      const d = p ? Math.hypot(p.x - pose.x, p.y - pose.y) : Infinity;
+      if (d < .3) { out.push(`${other}와 ${d.toFixed(2)} m — 충돌 주의`); break; }
+    }
+  }
+  return out;
+}
+function drawGhosts() {
+  const now = Date.now();
+  for (const id of IDS) {
+    const s = sentPose[id];
+    if (s && now < s.until) {
+      drawnTimed = true;   // 2초 뒤 지워야 한다
+      const q = worldToScreen(s.pose);
+      ctx.save(); ctx.beginPath(); ctx.arc(q.x, q.y, MARKER_R + 9, 0, TAU); ctx.strokeStyle = COLOR[id]; ctx.lineWidth = 2; ctx.stroke(); ctx.restore();
+      const {rect} = placeLabel(circleBox(q, MARKER_R + 10), labelWidth('보낸 초기 위치'), 22, ['se', 'e', 'ne', 'sw', 'w', 'nw'], null);
+      drawLabel(rect.x, rect.y, id, '보낸 초기 위치', 'rgba(14, 20, 29, .9)', '#fff', COLOR[id]);
+    }
+    const p = pending[id];
+    if (p && p.target) drawPlacement(id, p.action, p.target, '보내는 중…', 'pending');
+  }
+  if (coordPreview && tool) {
+    drawPlacement(tool.robot, tool.kind, coordPreview, '좌표 입력', 'ghost', targetWarnings(coordPreview, tool.robot).length > 0);
+  }
+  if (drag) {
+    const g = gesture(drag), warn = targetWarnings(g, drag.robot);
+    drawPlacement(drag.robot, drag.kind, g, drag.kind === 'goal' ? '목적지' : '여기 있음', 'ghost', warn.length > 0);
+    if (g.moved) arrow(drag.start, drag.end, COLOR[drag.robot]);
+    const text = `x ${g.x.toFixed(2)} · y ${g.y.toFixed(2)} · ${deg(g.yaw)}°` + (g.moved ? '' : ' · 현재 방향 유지') + warn.map(w => ' · ' + w).join('');
+    drawTag(drag.end.x + 16, drag.end.y + 16, text, warn.length > 0);
+  }
+}
+function drawScale() {   // 왼쪽 아래 축척 막대 (60~120px이 되는 첫 길이) + 축 방향
+  const pxPerM = scale / map.resolution, steps = [.1, .25, .5, 1, 2];
+  const m = steps.find(s => s * pxPerM >= 60 && s * pxPerM <= 120)
+    || steps.reduce((a, b) => Math.abs(b * pxPerM - 90) < Math.abs(a * pxPerM - 90) ? b : a);
+  const len = m * pxPerM, x = 14, y = cssH - 9, label = `${m} m`;
+  ctx.save(); ctx.font = `600 12px ${FONT}`;
+  const tw = ctx.measureText(label).width;
+  roundRect(x - 8, y - 17, len + tw + 78, 22, 6); ctx.fillStyle = 'rgba(14, 20, 29, .85)'; ctx.fill();
+  ctx.beginPath(); ctx.moveTo(x, y - 7); ctx.lineTo(x, y - 2); ctx.lineTo(x + len, y - 2); ctx.lineTo(x + len, y - 7);
+  ctx.strokeStyle = '#e7edf6'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = '#e7edf6'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left'; ctx.fillText(label, x + len + 6, y - 6);
+  // 축: 지도 +x, +y가 화면에서 향하는 쪽 (원점 yaw가 0이면 x→ y↑)
+  const gx = x + len + tw + 16, gy = y - 6, a = map.origin.yaw;
+  const axes = [['x', Math.cos(a), Math.sin(a)], ['y', Math.sin(a), -Math.cos(a)]];
+  ctx.strokeStyle = ctx.fillStyle = '#c8d3e1'; ctx.lineWidth = 1.5; ctx.font = `600 11px ${FONT}`; ctx.lineCap = 'round';
+  axes.forEach(([name, dx, dy], i) => {
+    const bx = gx + i * 28 + 12, ex = bx + dx * 6, ey = gy + dy * 6;
+    ctx.fillText(name, gx + i * 28, gy);
+    ctx.beginPath(); ctx.moveTo(bx - dx * 6, gy - dy * 6); ctx.lineTo(ex, ey);
+    ctx.moveTo(ex - dx * 4 - dy * 3, ey - dy * 4 + dx * 3); ctx.lineTo(ex, ey); ctx.lineTo(ex - dx * 4 + dy * 3, ey - dy * 4 - dx * 3);
+    ctx.stroke();
+  });
+  ctx.restore();
+}
+
+// ─────────────── 입력: 도구·포인터·키보드·좌표 입력 ───────────────
+function select(id) { selected = id; render(); draw(); }
+function pick(id) {   // 도구줄 칩·숫자키: 선택 + 켜 둔 도구를 그 로봇으로 옮김 (못 쓰면 도구를 풀고 선택만)
+  if (tool && tool.robot !== id && arm(id, tool.kind)) return;
+  if (tool && tool.robot !== id) { tool = null; closeCoord(); }
+  select(id);
+}
+function showTemp(robotId, text, ms = 3000) {
+  tempHint = {robot: robotId, text, until: Date.now() + ms};
+  setTimeout(render, ms + 30);
+}
+function arm(id, kind) {
+  if (tool && tool.robot === id && tool.kind === kind) return disarm();
+  const why = toolBlock(id, kind);
+  if (why) { showTemp(id, `${ACTION_KO[kind]} — ${why}`); render(); return false; }
+  tool = {robot: id, kind}; selected = id; drag = null; tempHint = null;
+  closeCoord();
+  render(); draw();
+  return true;
+}
+// 안내 알약·좌표 칸은 도구가 꺼지면 사라진다. 포커스가 그 안에 있었으면 방금 쓰던 도구 버튼으로 돌려준다
+function focusInHint() { const a = document.activeElement; return !!a && $('#hint').contains(a); }
+function returnFocus(t, had) { if (t && had) ui[t.robot][t.kind === 'goal' ? 'toolGoal' : 'toolPose'].focus({preventScroll: true}); }
+function disarm() {
+  const t = tool, had = focusInHint();
+  tool = null; drag = null; closeCoord(); render(); draw();
+  returnFocus(t, had);
+}
+function armSetup(id) {
+  if (!tool || tool.robot !== id || tool.kind !== 'initialpose') arm(id, 'initialpose');
+}
+// 쓸 수 없게 된 도구는 저절로 풀고 이유를 알려 준다
+function autoDisarm() {
+  if (!tool) return;
+  const why = toolBlock(tool.robot, tool.kind);
+  if (!why || why === WHY.busy) return;
+  const t = tool, had = focusInHint();
+  tool = null; drag = null; closeCoord();
+  showTemp(t.robot, `도구를 풀었어요 — ${why}`);
+  returnFocus(t, had);
+}
+// 끌기 → 보낼 자세. 화면에서 CLICK_PX(8px) 미만이면 클릭: 로봇의 지금 방향(모르면 0)
+function gesture(d) {
+  const p = screenToWorld(d.start), q = screenToWorld(d.end);
+  const moved = Math.hypot(d.end.x - d.start.x, d.end.y - d.start.y) >= CLICK_PX;
+  const r = robot(d.robot);
+  return {x: p.x, y: p.y, yaw: moved ? Math.atan2(q.y - p.y, q.x - p.x) : (r && r.pose ? r.pose.yaw : 0), moved};
+}
+function cancelDrag() { if (drag) { drag = null; draw(); } }
+
+canvas.addEventListener('pointerdown', e => {
+  if (e.button !== 0) { cancelDrag(); return; }
+  const p = point(e);
+  if (!tool) { tap = p; return; }
+  if (!map) return;
+  const why = toolBlock(tool.robot, tool.kind);
+  if (why) { showTemp(tool.robot, why); render(); return; }
+  if (!insideMap(p)) return;
+  closeCoord();
+  // 끌기는 누른 순간 켜져 있던 도구의 로봇으로만 보낸다
+  drag = {robot: tool.robot, kind: tool.kind, start: p, end: p};
+  canvas.setPointerCapture(e.pointerId); e.preventDefault(); draw();
+});
+canvas.addEventListener('pointermove', e => {
+  const p = point(e);
+  updateReadout(p);
+  if (!drag) return;
+  if (e.buttons & 2) { cancelDrag(); return; }   // 끄는 중 오른쪽 버튼 = 취소
+  drag.end = p; draw();
+});
+canvas.addEventListener('pointerup', e => {
+  const p = point(e);
+  if (tap && !drag) {
+    if (Math.hypot(p.x - tap.x, p.y - tap.y) < CLICK_PX) viewClick(p);
+    tap = null; return;
+  }
+  if (!drag) return;
+  const d = drag; drag = null; d.end = p;
+  const g = gesture(d);
+  if (!e.shiftKey) tool = null;   // 한 번 쓰면 '보기'로 (Shift = 계속)
+  send(d.robot, d.kind, {x: g.x, y: g.y, yaw: g.yaw});
+});
+canvas.addEventListener('pointercancel', () => { tap = null; cancelDrag(); });
+canvas.addEventListener('pointerleave', () => { if (!drag) updateReadout(null); });
+// 도구가 켜져 있으면 오른쪽 클릭 메뉴를 막고, 지도를 끌고 있었으면 그 끌기를 취소한다
+// (끄는 중 오른쪽 버튼은 pointermove의 buttons & 2도 잡는다)
+canvas.addEventListener('contextmenu', e => {
+  if (!drag && !tool) return;
+  e.preventDefault();
+  cancelDrag();
+});
+
+// 보기 상태의 클릭: 로봇 표시를 누르면 선택, 빈 곳이면 도구를 고르라고 알려 준다 (아무것도 보내지 않는다)
+function viewClick(p) {
+  if (!map) return;
+  for (const r of robots) {
+    if (!r.online || !r.map_matches || !r.pose) continue;
+    const q = worldToScreen(r.pose);
+    if (Math.hypot(q.x - p.x, q.y - p.y) <= HIT_R) { select(r.id); return; }
+  }
+  if (insideMap(p)) { showTemp(null, '지도에 명령하려면 먼저 도구를 고르세요 — ↗ 초기 위치(P) · ⚑ 목적지(G)'); render(); }
+}
+function updateReadout(p) {   // 좌표 줄의 커서 칸 (지도 밖이면 안내 글)
+  const el = $('#curXY'), inside = p && insideMap(p);
+  el.classList.toggle('off', !inside);
+  if (!inside) { setText(el, '지도 위에 올려 보세요'); return; }
+  const w = screenToWorld(p);
+  setText(el, `x ${w.x.toFixed(2)} · y ${w.y.toFixed(2)}`);
+}
+function renderCoords() {    // 좌표 줄의 로봇 칸: 위치를 모르면 이유를 짧게
+  for (const id of IDS) {
+    const r = robot(id), chip = $('#coord-' + id), text = chip.lastElementChild;
+    if (!text) continue;   // 칩을 만들기 전
+    const live = r && r.online && r.map_matches && r.pose;
+    setText(text, live ? `x ${r.pose.x.toFixed(2)} · y ${r.pose.y.toFixed(2)} · ${deg(r.pose.yaw)}°`
+                       : `위치 없음 — ${view(id).short || '대기'}`);
+    text.classList.toggle('off', !live);
+    setAttr(chip, 'aria-pressed', String(selected === id));
+  }
+}
+for (const id of IDS) {      // 좌표 칩: [번호] robotN  x … · y … · …°  (누르면 그 로봇 선택)
+  const chip = $('#coord-' + id), text = document.createElement('span');
+  chip.style.setProperty('--rc', COLOR[id]);
+  chip.title = `${id} 선택`;
+  chip.append(...makeDisc(id), text);
+  chip.addEventListener('click', () => select(id));
+}
+
+// 좌표 입력: 끌기 대신 키보드로 정확하게
+const coordForm = $('#coord');
+function openCoord() {
+  if (!tool) return;
+  const r = robot(tool.robot), base = (tool.kind === 'goal' && r && r.nav.target) || (r && r.pose) || {x: 0, y: 0, yaw: 0};
+  $('#cx').value = base.x.toFixed(2); $('#cy').value = base.y.toFixed(2); $('#cdeg').value = deg(base.yaw || 0);
+  $('#coordErr').textContent = '';
+  coordForm.hidden = false; readCoord(); render(); $('#cx').focus();
+}
+function closeCoord(refocus) {
+  if (coordForm.hidden) return;
+  coordForm.hidden = true; coordPreview = null; setText($('#coordWarn'), ''); draw();
+  if (refocus) $('#hintCoord').focus();
+}
+// 입력할 때마다 미리보기 + 끌기 때와 같은 경고(지도 밖·벽 위·미탐색·충돌 주의)
+function readCoord() {
+  const [x, y, d] = ['#cx', '#cy', '#cdeg'].map(s => $(s).value.trim() === '' ? NaN : Number($(s).value));
+  coordPreview = [x, y, d].every(Number.isFinite) ? {x, y, yaw: d * Math.PI / 180} : null;
+  const warn = coordPreview && tool && map ? targetWarnings(coordPreview, tool.robot) : [];
+  setText($('#coordWarn'), warn.length ? `⚠ ${warn.join(' · ')}` : '');
+  draw();
+  return coordPreview;
+}
+coordForm.addEventListener('input', readCoord);
+coordForm.addEventListener('submit', e => {
+  e.preventDefault();
+  const pose = readCoord();
+  if (!pose) { $('#coordErr').textContent = '숫자를 입력하세요'; return; }
+  const why = tool ? toolBlock(tool.robot, tool.kind) : WHY.server;
+  if (why) { $('#coordErr').textContent = why; return; }
+  // 지도 밖은 보내지 않는다 (끌기도 지도 안에서만 시작된다). 벽 위·충돌 주의는 경고만 하고 보낸다
+  if (targetWarnings(pose, tool.robot).includes('지도 밖')) { $('#coordErr').textContent = '지도 밖 좌표예요 — 숫자를 확인하세요'; return; }
+  const t = tool, had = focusInHint();
+  closeCoord(); tool = null;
+  send(t.robot, t.kind, pose);
+  returnFocus(t, had);
+});
+$('#coordClose').onclick = () => closeCoord(true);
+$('#hintCoord').onclick = openCoord;
+$('#hintOff').onclick = disarm;
+$('#hintSetup').onclick = () => { const id = setupRobot(); if (id) armSetup(id); };
+$('#fitBtn').onclick = fit;
+$('#cancelAll').onclick = () => IDS.forEach(id => send(id, 'stop'));
+
+// 키보드: e.code로 본다 (한글 입력기가 켜져 있으면 e.key가 'ㅎ'처럼 바뀐다)
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey || e.altKey || e.metaKey || e.isComposing || e.repeat) return;
+  if ($('#help').open) return;                     // 도움말은 <dialog>가 Esc를 처리한다
+  if (e.code === 'Escape') {
+    if (!coordForm.hidden) closeCoord(true);
+    else if (drag) cancelDrag();
+    else if (tool) disarm();
+    else return;
+    e.preventDefault(); return;
+  }
+  if (!shortcutsOn || (e.target.closest && e.target.closest('input, textarea, select'))) return;
+  const code = e.code;
+  if (code === 'Digit1' || code === 'Numpad1') pick('robot1');
+  else if (code === 'Digit2' || code === 'Numpad2') pick('robot2');
+  else if (code === 'KeyP' && !e.shiftKey) arm(selected, 'initialpose');
+  else if (code === 'KeyG' && !e.shiftKey) arm(selected, 'goal');
+  else if (code === 'KeyF' && !e.shiftKey) fit();
+  else if (code === 'KeyX') { if (e.shiftKey) IDS.forEach(id => send(id, 'stop')); else send(selected, 'stop'); }
+  else if (code === 'Slash' && e.shiftKey) openHelp();
+  else return;
+  e.preventDefault();
+});
+
+// 도움말 + 단축키 끄기(이 브라우저에만 저장)
+// target: 열자마자 보여 줄 항목 (예: 카드의 '램프 응답 없음' → 용어 > 램프)
+let helpOpener = null;
+function openHelp(target) {
+  helpOpener = document.activeElement;
+  $('#help').showModal();
+  const el = typeof target === 'string' ? $(target) : null;
+  if (el) { el.scrollIntoView({block: 'center'}); el.focus({preventScroll: true}); }
+}
+$('#helpBtn').onclick = () => openHelp();
+// 닫으면 연 버튼으로 돌아간다 (그 버튼이 사라졌으면 ? 버튼으로)
+$('#help').addEventListener('close', () => {
+  const ok = helpOpener && helpOpener !== document.body && helpOpener.isConnected && helpOpener.getClientRects().length;
+  const back = ok ? helpOpener : $('#helpBtn');
+  back.focus();
+});
+try { shortcutsOn = localStorage.getItem('pinkyFleet.shortcutsOff') !== '1'; } catch (e) { /* 저장소를 못 써도 기본값 */ }
+$('#kbdOff').checked = !shortcutsOn;
+$('#kbdOff').onchange = e => {
+  shortcutsOn = !e.target.checked;
+  try { localStorage.setItem('pinkyFleet.shortcutsOff', shortcutsOn ? '0' : '1'); } catch (err) { /* 무시 */ }
+};
+
+// ─────────────── 요청 (로봇별 대기, 8초 제한, 자동 재시도 없음) ───────────────
+async function request(url, options = {}) {
+  const response = await fetch(url, {...options, signal: AbortSignal.timeout(TIMEOUT_MS)});
+  let body;
+  try { body = await response.json(); }
+  catch (e) {
+    if (e.name === 'TimeoutError') throw e;
+    throw Object.assign(new Error(`응답 형식 오류 (HTTP ${response.status})`), {kind: 'format'});
+  }
+  // code: 백엔드가 붙인 실패 종류(예: 'amcl_not_ready'). 없으면 null → 해 볼 것 없이 오류 글자만 보인다
+  if (!response.ok) throw Object.assign(new Error(body.error || '요청 실패'), {kind: 'http', status: response.status, code: body.code || null});
+  return body;
+}
+function failText(action, err) {
+  if (err.name === 'TimeoutError') return '⏱ 응답 없음(8초) — 처리됐을 수 있어요. 카드 상태를 먼저 확인하세요. 자동으로 다시 보내지 않아요.';
+  if (err.name === 'TypeError') return '✕ 관제 서버에 닿지 않아요';
+  if (err.kind === 'format') return '✕ ' + err.message;
+  if (err.status === 504) return '⏱ ' + err.message;
+  let text = `✕ ${ACTION_KO[action]} 실패: ${err.message}`;
+  if (err.code === 'cancel_rejected') text += ' — 취소할 목표가 없었을 수 있어요';
+  const tip = TRY_REQ[err.code];
+  return tip ? `${text} → 해 볼 것: ${tip}` : text;
+}
+async function send(id, action, pose) {
+  // 한 로봇에 위치·목적지 요청은 한 번에 하나만 (이동 취소는 언제든 보낸다)
+  if (action !== 'stop' && pending[id]) { showTemp(id, `${ACTION_KO[action]} — ${WHY.busy}`); render(); return; }
+  const body = action === 'stop' ? {} : {x: pose.x, y: pose.y, yaw: pose.yaw};
+  const token = action === 'stop' ? null : {action, target: body};   // 끝날 때 내 요청일 때만 비운다
+  if (token) pending[id] = token;
+  else stopPending[id]++;
+  log(id, '→', action === 'stop' ? '이동 취소 보냄' : `${ACTION_KO[action]} 보냄 (${xy(body)})`, 'info');
+  render(); draw();
+  let result;
+  try {
+    const res = await request(`/api/robots/${id}/${action}`,
+      {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    result = {ok: true, text: `✓ ${hhmmss()} ${res.message}`};
+    log(id, '✓', res.message, 'ok');
+    if (action === 'initialpose') sentPose[id] = {pose: body, until: Date.now() + 2000};
+  } catch (err) {
+    result = {ok: false, text: failText(action, err)};
+    log(id, '✕', result.text.replace(/^[✕⏱] /, ''), action === 'stop' ? 'warn' : 'crit');
+  } finally {
+    if (!token) stopPending[id]--;
+    else if (pending[id] === token) pending[id] = null;
+  }
+  track[id].result = {...result, at: Date.now()};
+  $('#srPolite').textContent = `${id} ${result.text}`;
+  render(); draw();
+}
+function resend(id) {
+  const r = robot(id);
+  if (!r || !r.nav.target) return;
+  const why = toolBlock(id, 'goal');
+  if (why) { showTemp(id, `다시 보내기 — ${why}`); render(); return; }
+  send(id, 'goal', r.nav.target);
+}
+function ackRobot(id) { openIssues.filter(i => i.robot === id).forEach(i => acks.add(i.key)); render(); }
+
+// ─────────────── 이벤트 기록 (새 줄만 앞에 붙인다. 폴링마다 다시 만들지 않는다) ───────────────
+function log(id, glyph, text, sev) {
+  const li = document.createElement('li'), time = document.createElement('time');
+  li.className = 'sev-' + sev; time.className = 'num'; time.textContent = hhmmss();
+  li.append(time);
+  if (id) li.append(...makeDisc(id));
+  const g = document.createElement('span'), tx = document.createElement('span');
+  g.className = 'lg'; g.textContent = glyph; g.setAttribute('aria-hidden', 'true');
+  tx.className = 'tx'; tx.textContent = text; tx.title = text;
+  li.append(g, tx);
+  const list = $('#logList');
+  list.prepend(li);
+  while (list.children.length > LOG_MAX) list.lastChild.remove();
+  $('#logEmpty').hidden = true;
+  setText($('#logCount'), String(list.children.length));
+}
+// 로봇 상태 추적: 끊김 디바운스, 마지막 위치, 목표 상태 전환 기록, 진행 막대 기준 거리
+function updateTracks() {
+  for (const r of robots) {
+    const t = track[r.id];
+    if (!t) continue;
+    if (r.online) {
+      if (t.seenOnline && t.offlinePolls >= OFFLINE_POLLS) log(r.id, '✓', `다시 연결됨 (끊김 ${since(t.offlineSince)}초)`, 'ok');
+      t.offlinePolls = 0; t.seenOnline = true; t.lastNav = r.nav.state;
+      if (r.pose && r.map_matches) { t.lastPose = r.pose; t.lastPoseAt = Date.now(); }
+    } else {
+      if (t.offlinePolls === 0) { t.offlineSince = Date.now(); t.navBeforeDrop = t.lastNav; }
+      t.offlinePolls++;
+      if (t.offlinePolls === OFFLINE_POLLS && t.seenOnline) {
+        t.episode++;
+        log(r.id, WARN, ACTIVE.includes(t.navBeforeDrop) ? '연결 끊김 — 이동 중이었어요' : '연결 끊김', 'crit');
+      }
+    }
+    const n = r.nav;
+    // 목표 상태가 바뀔 때마다 한 줄 (처음 받은 상태와 '대기'는 기록하지 않는다)
+    const key = `${n.id}:${n.state}`, prev = t.navKey;
+    t.navKey = key;
+    if (prev !== undefined && prev !== key && n.state !== 'idle') {
+      const s = NAV[n.state] || {ko: n.label, en: n.state, glyph: '•'};
+      let text = `${s.ko} · ${s.en}`;
+      if (n.state === 'succeeded') { t.arrivedAt[n.id] = hhmmss(); if (n.feedback) text += ` (${secs(n.feedback.elapsed)})`; }
+      if (n.state === 'aborted') text += ` — ${n.error || '이유 모름'}`;
+      const sev = {succeeded: 'ok', aborted: 'crit', accepted: 'move', executing: 'move'}[n.state] || 'info';
+      log(r.id, s.glyph, text, sev);
+    }
+    if (n.id !== t.goalMax.id) t.goalMax = {id: n.id, max: 0};
+    if (n.feedback && n.feedback.distance > t.goalMax.max) t.goalMax.max = n.feedback.distance;
+  }
+}
+
+// ─────────────── 화면 갱신 (바뀐 값만 DOM에 쓴다: 포커스·스크린리더가 흔들리지 않게) ───────────────
+function render() {
+  autoDisarm();
+  openIssues = issues();
+  renderHeader();
+  for (const id of IDS) { renderTools(id); renderCard(id); }
+  renderCoords();
+  renderHint();
+  renderOverlay();
+  renderSummary();
+}
+function renderHeader() {
+  const c = conn.state, age = (Date.now() - conn.lastOk) / 1000, el = $('#conn');
+  let cls = 'conn', glyph = '…', label = '서버 연결 중', title = '';
+  if (c === 'connecting' && conn.firstFailed) { cls = 'conn lost'; glyph = '✕'; label = '서버에 연결 안 됨 · 재시도 중'; }
+  else if (c === 'fresh') { cls = 'conn fresh'; glyph = '●'; label = '연결됨'; title = `마지막 수신 ${age.toFixed(1)}초 전`; }
+  else if (c === 'slow') { cls = 'conn slow'; glyph = '◐'; label = `응답 느림 · ${age.toFixed(1)}초 전`; }
+  else if (c === 'lost') { cls = 'conn lost'; glyph = '✕'; label = `서버 연결 끊김 · ${Math.round(age)}초째 · 재시도 중`; }
+  setClass(el, cls); setText(el.firstElementChild, glyph); setText($('#connText'), label);
+  setAttr(el, 'title', title || label);
+
+  // 알림 슬롯: 가장 심각한 한 가지 + 나머지 개수
+  const list = openIssues, box = $('#alert');
+  let top = list[0], keys = top ? [top.key] : [];
+  // 두 로봇이 다 끊겼으면 한 줄로 합친다. 합쳐도 둘 중 하나라도 위급이면 빨강, 이동 중이었으면 '직접 가서 멈추세요'를 남긴다
+  const drops = list.filter(i => i.rank === 1);
+  if (top && top.rank === 1 && drops.length > 1) {
+    const moving = drops.filter(i => i.moving).map(i => i.robot);
+    top = {robot: null, crit: drops.some(i => i.crit), text: moving.length
+      // 알림은 한 줄이라 길면 뒤가 잘린다 → 해야 할 일(직접 가서 멈추기)을 앞에 둔다
+      ? `실물이면 직접 가서 멈추세요 — 두 로봇 끊김, ${moving.length > 1 ? '둘 다' : moving[0]} 이동 중이었어요`
+      : '두 로봇 모두 끊김 — 시뮬 일시정지이거나 공유기 문제일 수 있어요'};
+    keys = drops.map(i => i.key);
+  }
+  box.classList.toggle('empty', !top);
+  if (top) {
+    box.classList.toggle('warn', !top.crit);
+    const rb = $('#alertRobot');
+    show(rb, !!top.robot);
+    if (top.robot && rb.dataset.robot !== top.robot) {
+      rb.dataset.robot = top.robot; rb.replaceChildren(makeDisc(top.robot)[0], document.createTextNode(top.robot));
+    }
+    setText($('#alertText'), (top.crit ? WARN + ' ' : '') + top.text); setAttr($('#alertText'), 'title', top.text);
+    setText($('#alertMore'), list.length > keys.length ? `+${list.length - keys.length}` : '');
+    box.dataset.keys = keys.join('|');
+  }
+  // 새로 생긴 위급 알림은 한 번만 소리 내어 알린다
+  const fresh = list.filter(i => i.crit && !announced.has(i.key));
+  if (fresh.length) {
+    $('#srAssert').textContent = fresh.map(i => (i.robot ? i.robot + ' ' : '') + i.text).join('. ');
+    fresh.forEach(i => announced.add(i.key));
+  }
+  const pageTitle = (list.some(i => i.crit) ? '(!) ' : '') + 'Pinky Fleet 관제';
+  if (document.title !== pageTitle) document.title = pageTitle;
+}
+$('#alertAck').onclick = () => { ($('#alert').dataset.keys || '').split('|').forEach(k => k && acks.add(k)); render(); };
+$('#alertRobot').onclick = () => {
+  const id = $('#alertRobot').dataset.robot;
+  if (!id) return;
+  select(id); ui[id].card.scrollIntoView({block: 'nearest', behavior: smooth()});
+};
+
+function renderTools(id) {
+  const el = ui[id], v = view(id);
+  setAttr(el.chip, 'aria-pressed', String(id === selected));
+  // 서버가 끊기면 마지막 상태 대신 '수신 끊김'을 글자로 (흐리게만 해서 알리지 않는다. 마지막 상태는 카드에 남는다)
+  const stale = conn.state === 'lost' && !!robot(id);
+  setText(el.chipGlyph, stale ? '✕' : v.glyph); setText(el.chipText, stale ? '수신 끊김' : v.short);
+  setClass(el.chipText.parentElement, 'rstat ' + (stale ? 'st-grey' : TONE_TEXT[v.tone] || 'st-grey'));
+  for (const [btn, kind] of [[el.toolPose, 'initialpose'], [el.toolGoal, 'goal']]) {
+    const armed = !!tool && tool.robot === id && tool.kind === kind, why = armed ? null : toolBlock(id, kind);
+    setAttr(btn, 'aria-pressed', String(armed));
+    setAttr(btn, 'aria-disabled', why ? 'true' : null);
+    setAttr(btn, 'title', TOOL_TITLE[kind] + (why ? ` — 지금은 못 써요: ${why}` : ''));
+  }
+}
+
+function renderCard(id) {
+  const el = ui[id], r = robot(id), v = view(id), t = track[id], n = r && r.nav;
+  const mine = openIssues.filter(i => i.robot === id), crit = mine.some(i => i.crit);
+  const card = el.card;
+  card.classList.toggle('sel', id === selected);
+  card.classList.toggle('pulse', crit);
+  card.classList.toggle('bad', v.tone === 'red');
+  card.classList.toggle('dim', v.key === 'offline' || v.key === 'offline0');
+  const stale = conn.state === 'lost' && !!r;
+  card.classList.toggle('stale', stale);
+  setAttr(el.name, 'aria-pressed', String(id === selected));
+  show(el.selTag, id === selected);
+  setText(el.dom, ` · domain ${r ? r.domain : '…'}`);
+  // Nav2 준비 안 됨: 위치가 있는데도 준비가 안 됐을 때만 띠 위 알약으로 (위치가 없을 때는 설명 한 문장에 합쳤다)
+  show(el.navChip, !!r && r.online && !!r.pose && r.map_matches && r.nav_ready === false);
+  // 다시 보내기: 실패·취소 + 목적지를 알 때만. 좌표를 글자에 보여 줘서 누르는 게 곧 확인이 되게
+  const canResend = !!(n && n.id && n.target && (n.state === 'aborted' || n.state === 'canceled'));
+  show(el.resend, canResend);
+  if (canResend) {
+    const why = toolBlock(id, 'goal');
+    setText(el.resendXY, ` (${xy(n.target)})`);
+    setAttr(el.resend, 'aria-label', `${id} 목적지 다시 보내기 (${xy(n.target)})`);
+    setAttr(el.resend, 'aria-disabled', why ? 'true' : null);
+    setAttr(el.resend, 'title', why ? `지금은 못 보내요: ${why}` : `같은 목적지 (${xy(n.target)}, ${deg(n.target.yaw)}°)로 다시 보냅니다`);
+  }
+  show(el.setpose, v.key === 'nopose');
+  card.classList.toggle('crowded', canResend || v.key === 'nopose');
+  // 상태 띠: 기호 + 한국어 + 영어 대문자 (색만으로 알리지 않는다). 서버가 끊기면 '마지막 수신 시각'을 글자로 붙인다
+  setClass(el.band, 'band t-' + v.tone);
+  setText(el.glyph, v.glyph); setText(el.ko, v.ko); setText(el.en, v.en);
+  setText(el.extra, stale ? `· 마지막 수신 ${hhmmss(new Date(conn.lastOk))}` : v.extra || '');
+  const rec = n && n.state === 'executing' && n.feedback ? n.feedback.recoveries : 0;
+  show(el.rec, rec >= 1);
+  if (rec >= 1) setText(el.rec, (rec >= 3 ? WARN + ' ' : '') + `복구 ${rec}회`);   // 3회부터는 ⚠ 기호로 구분
+  show(el.ack, crit);
+  // 진행 막대: 1 − 남은 거리 ÷ 이 목표에서 본 가장 큰 남은 거리 (%는 쓰지 않는다)
+  const on = v.key === 'executing' && n.feedback && t.goalMax.max > 0;
+  el.prog.classList.toggle('on', !!on);
+  if (on) el.progBar.style.width = (Math.max(0, Math.min(1, 1 - n.feedback.distance / t.goalMax.max)) * 100).toFixed(1) + '%';
+  setText(el.detail, v.detail); setAttr(el.detail, 'title', v.detail);
+  setText(el.pos, v.pos || ''); setAttr(el.pos, 'title', v.pos || null);
+  // 마지막 요청 결과 (10초 지나면 흐리게). 전체 글자는 이벤트 기록에도 남는다
+  let text = '', cls = 'result num', fresh = false;
+  if (stopPending[id]) { fresh = true; text = '… 이동 취소 요청 중' + (pending[id] ? ' (앞 요청 처리 뒤 실행)' : ''); }
+  else if (pending[id]) { fresh = true; text = `… 요청 중: ${ACTION_KO[pending[id].action]}`; }
+  else if (t.result) {
+    fresh = Date.now() - t.result.at <= 10000;
+    text = t.result.text; cls += (t.result.ok ? '' : ' bad') + (fresh ? '' : ' old');
+  }
+  setText(el.result, text); setClass(el.result, cls); setAttr(el.result, 'title', text || null);
+  // 램프: 백엔드가 lamp 필드를 보낼 때만. 화면이 nav 상태로 램프를 짐작하지 않는다.
+  // 짧게: '● 램프 파랑 깜빡임 ✓' / '… 보내는 중' / '✕ 램프 응답 없음'(누르면 도움말). 새 요청 결과가 있으면 견본 + 표시만
+  const lamp = r && r.lamp && typeof r.lamp === 'object' ? r.lamp : null;
+  show(el.lamp, !!lamp);
+  if (lamp) {
+    const color = lampColor(lamp.rgb), compact = fresh && !!text;
+    el.lamp.classList.toggle('compact', compact);
+    show(el.lampSw, !!color);
+    if (color) { el.lampSw.style.setProperty('--sw', color.css); setClass(el.lampSw, 'sw' + (color.white ? ' white' : '') + (lamp.ok === false ? ' hollow' : '')); }
+    setText(el.lampText, `램프 ${lamp.label}`);
+    setText(el.lampMark, lamp.ok === true ? ' ✓' : lamp.ok == null ? (compact ? ' …' : ' · 보내는 중') : '');
+    setClass(el.lampMark, lamp.ok === true ? 'lamp-ok' : '');
+    show(el.lampFail, lamp.ok === false);
+    setText(el.lampFail, compact ? '✕' : '✕ 램프 응답 없음');
+  }
+}
+
+function setupRobot() {   // 연결됐고 공통 지도도 있는데 위치를 모르는 로봇
+  if (!serverOk()) return null;
+  return IDS.find(id => { const r = robot(id); return r && r.online && r.map_id && r.map_matches && !r.pose; }) || null;
+}
+function renderHint() {
+  const temp = tempHint && Date.now() < tempHint.until ? tempHint : null;
+  let id = null, text = '', setup = false;
+  if (temp) { id = temp.robot; text = temp.text; }
+  else if (tool) {
+    id = tool.robot;
+    text = tool.kind === 'goal' ? '목적지 (RViz Nav2 Goal) — 누르고 끌어 도착 방향 · 클릭만 = 현재 방향'
+      : '초기 위치 (RViz 2D Pose Estimate) — 로봇이 있는 곳을 누르고 끌어 방향 · 클릭만 = 현재 방향';
+  } else {
+    const who = setupRobot();
+    if (who) { id = who; text = '위치를 몰라요 →'; setup = true; }
+  }
+  const disc = $('#hintDisc');
+  show(disc, !!id);
+  if (id) { disc.style.setProperty('--rc', COLOR[id]); setText(disc, NUM[id]); }
+  setText($('#hintWho'), id ? id + ' ' : '');
+  setText($('#hintText'), text);
+  setAttr($('#hintText'), 'title', tool && !temp ? text + ' · Shift를 누른 채 놓으면 도구가 켜진 채로 남아요' : text || null);
+  show($('#hintPill'), !!text);
+  show($('#hintSetup'), setup);
+  if (setup) $('#hintSetup').style.setProperty('--rc', COLOR[id]);
+  show($('#hintCoord'), !!tool);
+  show($('#hintOff'), !!tool);
+  show($('#hint'), !!text || !coordForm.hidden);
+  if (tool) $('#hint').style.setProperty('--rc', COLOR[tool.robot]);
+  mapBox.classList.toggle('armed', !!tool);
+  if (tool) mapBox.style.setProperty('--armc', COLOR[tool.robot]);
+  canvas.classList.toggle('armed', !!tool);
+}
+function renderOverlay() {
+  let text = '', scrim = false;
+  if (conn.state === 'lost') { scrim = true; text = `관제 서버 연결 끊김 — 화면이 ${hhmmss(new Date(conn.lastOk))}에 멈춰 있어요`; }
+  else if (!map) text = conn.firstFailed && !conn.everOk
+    ? '관제 서버에 연결할 수 없어요 — sim.launch.py 또는 multi_robot.launch.py가 켜져 있는지 확인하세요'
+    : mapLoad.error ? `지도를 받지 못했어요 (${mapLoad.error}) — 잠시 뒤 다시 받아요` : '지도 수신 대기 중…';
+  show($('#overlay'), !!text);
+  $('#overlay').classList.toggle('scrim', scrim);
+  setText($('#overlayText'), text);
+}
+function renderSummary() {   // 지도(캔버스)의 글 요약. 스크린리더가 너무 자주 읽지 않게 2초에 한 번
+  if (Date.now() - summaryAt < 2000) return;
+  summaryAt = Date.now();
+  setText($('#mapSummary'), IDS.map(id => {
+    const r = robot(id), v = view(id);
+    let s = `${CIRCLED[id]} ${id}: ${v.ko}`;
+    if (r && r.pose) s += `, 위치 ${r.pose.x.toFixed(2)} ${r.pose.y.toFixed(2)}`;
+    if (r && r.nav.target && ACTIVE.includes(r.nav.state)) s += `, 목적지 ${r.nav.target.x.toFixed(2)} ${r.nav.target.y.toFixed(2)}`;
+    return s;
+  }).join('. '));
+}
+
+// ─────────────── 폴링·연결 신선도 ───────────────
+// 끊김 판단은 '실제 요청'으로만 한다: 요청이 실패했거나, 진행 중인 요청이 4초 넘게 안 끝날 때.
+// 마지막 성공 뒤 지난 시간으로 판단하면 숨긴 탭(타이머가 1분에 한 번으로 느려짐)이 가짜 끊김을 기록한다.
+function refreshConn() {
+  const busy = conn.inflightSince ? (Date.now() - conn.inflightSince) / 1000 : 0;
+  const s = !conn.everOk ? 'connecting' : conn.failing || busy > LOST_S ? 'lost' : busy > FRESH_S ? 'slow' : 'fresh';
+  if (s === 'lost' && conn.state !== 'lost') { conn.lostEpisode++; log(null, '✕', '서버 연결 끊김', 'crit'); }
+  if (conn.state === 'lost' && s !== 'lost') log(null, '✓', `서버 다시 연결됨 (끊김 ${Math.round(conn.downFor)}초)`, 'ok');
+  conn.state = s;
+}
+// 화면 코드의 오류는 콘솔에만 남긴다 (서버 연결 끊김으로 보이지 않게, 다음 할 일도 멈추지 않게)
+function guard(fn) { try { fn(); } catch (e) { console.error(e); } }
+async function poll() {
+  clearTimeout(pollTimer);
+  conn.inflightSince = Date.now();
+  let data = null;
+  try {
+    const body = await request('/api/state');
+    if (!Array.isArray(body.robots)) throw new Error('응답에 robots가 없어요');
+    data = body;
+  } catch (e) {
+    conn.failing = true;
+    if (!conn.everOk) conn.firstFailed = true;
+  }
+  // 연결 상태는 /api/state 한 요청으로만 정한다. 지도 받기·화면 갱신은 여기에 섞지 않는다
+  conn.inflightSince = 0;
+  pollTimer = setTimeout(poll, POLL_MS);
+  if (data) {
+    conn.downFor = (Date.now() - conn.lastOk) / 1000;
+    conn.everOk = true; conn.failing = false; conn.lastOk = Date.now();
+    robots = data.robots;
+    guard(updateTracks);
+    if (data.map_id && data.map_id !== mapId) loadMap();   // 기다리지 않는다: 지도가 오는 동안에도 상태는 계속 받는다
+  }
+  refreshConn();
+  guard(render); guard(draw);
+}
+// 지도는 따로 받는다. 실패는 '서버 연결 끊김'이 아니라 지도 위 안내 + 기록 한 줄로 알리고,
+// 실패가 이어지면 1 → 2 → 4 → 8초 간격으로 다시 받는다 (0.5초마다 큰 지도를 다시 받지 않게)
+async function loadMap() {
+  if (mapLoad.busy || Date.now() < mapLoad.retryAt) return;
+  mapLoad.busy = true;
+  let data = null;
+  try {
+    data = await request('/api/map');
+  } catch (e) {
+    mapLoad.fails++;
+    mapLoad.retryAt = Date.now() + Math.min(8000, 1000 * 2 ** (mapLoad.fails - 1));
+    mapLoad.error = e.name === 'TimeoutError' ? '응답 없음 8초' : e.name === 'TypeError' ? '관제 서버에 닿지 않음' : e.message;
+    if (mapLoad.fails === 1) log(null, '✕', `지도 받기 실패 — ${mapLoad.error} (다시 시도 중)`, 'warn');
+  }
+  mapLoad.busy = false;
+  if (data) {
+    Object.assign(mapLoad, {fails: 0, retryAt: 0, error: ''});
+    guard(() => installMap(data));
+  }
+  guard(render);
+}
+// 기록은 펼친 채로 시작한다(HTML의 open). 좁은 창에서는 접을 수 있고, 앱 모드에서는 항상 펼친다
+const logDetails = $('#logDetails');
+function syncLogOpen() {
+  if (wideMQ.matches) logDetails.open = true;
+  setAttr(logDetails.firstElementChild, 'tabindex', wideMQ.matches ? '-1' : null);
+}
+logDetails.addEventListener('toggle', () => { if (wideMQ.matches && !logDetails.open) logDetails.open = true; });
+wideMQ.addEventListener('change', syncLogOpen);
+syncLogOpen();
+// 폴링과 별개로 0.5초마다 '몇 초 전' 글자와 연결 상태를 갱신한다.
+// 캔버스는 시간 따라 바뀌는 것이 그려져 있거나(drawnTimed) 연결 상태가 바뀔 때만 다시 그린다 (평소 그리기는 폴링이 맡는다)
+setInterval(() => {
+  const now = Date.now();
+  // 이 타이머 자체가 늦게 돌았으면(숨긴 탭·절전·멈춘 페이지) 그 지연을 서버 탓으로 치지 않는다
+  if (now - lastTick > 1500 && conn.inflightSince) conn.inflightSince = now;
+  lastTick = now;
+  const was = conn.state;
+  refreshConn(); render();
+  if (drawnTimed || conn.state !== was) draw();
+}, 500);
+// 탭이 다시 보이면 기다리지 않고 바로 한 번 받아 온다
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  lastTick = Date.now();
+  if (!conn.inflightSince) poll();
+});
+render(); poll();
 </script>
+</body>
 </html>
