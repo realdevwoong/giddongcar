@@ -1,0 +1,23 @@
+# good3 지도(maps/good3.yaml) 전용 교통 정리 칸. 좌표는 map 프레임 [m].
+# 지도를 새로 만들면 좌표를 다시 재고 test/test_traffic.py(지도 대조 테스트 포함)를 돌린다.
+map_check: {width: 84, height: 56, resolution: 0.05, origin: [-1.067, -0.171]}  # 받은 /map과 다르면 교통 정리를 끈다
+
+occupy_margin: 0.10     # 통로에서 이 거리 안에 서 있으면 그 통로를 막은 것으로 본다
+release_margin: 0.15    # 지나온 칸에서 이만큼 벗어나야 반납(AMCL 떨림에 잡았다 놓았다 하지 않게)
+goal_clearance: 0.20    # 통로에서 이 거리 안의 목적지는 거절(통로에 서면 길을 막는다)
+robot_clearance: 0.35   # 다른 로봇의 서 있는 자리·목적지에서 이 거리 안의 목적지는 거절
+
+cells:                  # 칸마다 열쇠 하나. 모든 빈 칸이 정확히 한 칸에 속해야 한다(테스트)
+  left_top:    {name: ① 왼쪽 위,    polygon: [[-0.2, 0.70], [1.585, 0.70], [1.585, 1.45], [-0.2, 1.45]]}
+  left_bottom: {name: ② 왼쪽 아래,  polygon: [[-0.2, -0.2], [1.585, -0.2], [1.585, 0.70], [-0.2, 0.70]]}
+  right_front: {name: ③ 오른쪽 앞칸, polygon: [[1.585, -0.2], [2.33, -0.2], [2.33, 1.45], [1.585, 1.45]]}
+  right_back:  {name: ④ 오른쪽 안칸, polygon: [[2.33, -0.2], [3.2, -0.2], [3.2, 1.45], [2.33, 1.45]]}
+
+links:                  # 서로 이어진 칸. via는 그 사이의 좁은 통로(지도 대조 테스트: 통로를 막으면 이 링크만 끊긴다)
+  - {between: [left_top, left_bottom]}                   # 책상 양옆으로 넓게 이어짐
+  - {between: [left_top, right_front], via: door}
+  - {between: [right_front, right_back], via: connector}
+
+passages:               # 좁은 통로. 목적지로 못 고르고, 안에 서 있는 로봇이 있으면 그 통로를 지나는 경로는 기다린다
+  door:      {name: 문,            polygon: [[1.35, 0.80], [1.85, 0.80], [1.85, 1.28], [1.35, 1.28]]}  # 문틈 x≈1.585, y 0.88~1.23
+  connector: {name: 칸막이 밑 통로, polygon: [[2.23, 0.06], [2.43, 0.06], [2.43, 0.65], [2.23, 0.65]]}  # 틈 x 2.28~2.38, y 0.08~0.63

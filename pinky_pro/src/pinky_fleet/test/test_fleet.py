@@ -13,6 +13,7 @@ from unittest.mock import Mock, call, patch
 
 import yaml
 from action_msgs.msg import GoalStatus, GoalStatusArray
+from action_msgs.srv import CancelGoal
 from geometry_msgs.msg import TransformStamped
 from nav2_msgs.action import NavigateToPose
 from launch import LaunchContext
@@ -21,7 +22,7 @@ from launch.utilities import perform_substitutions
 from rclpy.time import Time
 
 import pinky_fleet.fleet_dashboard as dashboard
-from pinky_fleet.fleet_dashboard import Fleet, Robot, handler_for, pose_input, await_future
+from pinky_fleet.fleet_dashboard import CommandError, Fleet, Robot, handler_for, pose_input, await_future
 
 
 class FakeRobot:
@@ -50,22 +51,54 @@ class FleetTests(unittest.TestCase):
     def test_mismatched_map_blocks_goals_but_allows_cancel(self):
         self.two.map_id = 'different'
         self.assertFalse(self.fleet.state()['robots'][1]['map_matches'])
-        with self.assertRaises(ValueError):
+        with self.assertRaises(CommandError) as caught:
             self.fleet.command('robot2', 'goal', dict(x=1, y=2, yaw=0))
+        self.assertEqual(caught.exception.code, 'map_mismatch')
         self.two.command.assert_not_called()
         self.fleet.command('robot2', 'stop', {})
         self.two.command.assert_called_once_with('stop', {})
 
     def test_unknown_route_does_not_dispatch(self):
         for robot, action in [('robot3', 'goal'), ('robot1', 'reset')]:
-            with self.assertRaises(ValueError):
+            with self.assertRaises(CommandError) as caught:
                 self.fleet.command(robot, action, {})
+            self.assertEqual(caught.exception.code, 'unknown_route')
         self.one.command.assert_not_called()
 
-    def test_rejects_nonfinite_coordinates(self):
-        for value in (math.nan, math.inf, -math.inf):
-            with self.assertRaises(ValueError):
-                pose_input(dict(x=value, y=0, yaw=0))
+    def test_rejects_bad_coordinates(self):
+        for body in (dict(x=math.nan, y=0, yaw=0), dict(x=math.inf, y=0, yaw=0), dict(x=-math.inf, y=0, yaw=0),
+                     dict(x=1, y=2), dict(x='a', y=0, yaw=0), [1, 2, 3]):
+            with self.subTest(body=body):
+                with self.assertRaises(CommandError) as caught:
+                    pose_input(body)
+                self.assertEqual(caught.exception.code, 'bad_pose')
+
+    def test_command_errors_have_codes(self):
+        # DDS 없이 Robot.command만 돌린다. 인자로 준 것만 준비가 안 된 가짜 로봇
+        def answered(value):
+            return Mock(add_done_callback=lambda callback: callback(None), result=Mock(return_value=value))
+
+        def robot(online=True, nav2=True, accepted=True, amcl=1, cancel=True, cancel_code=0):
+            return SimpleNamespace(
+                command_lock=threading.Lock(), lock=threading.RLock(), targets={},
+                snapshot=lambda: dict(online=online, pose={'x': 0} if online else None),
+                get_clock=lambda: SimpleNamespace(now=lambda: Time(seconds=1)),
+                initial=Mock(get_subscription_count=Mock(return_value=amcl)),
+                navigator=Mock(wait_for_server=Mock(return_value=nav2),
+                               send_goal_async=Mock(return_value=answered(SimpleNamespace(accepted=accepted)))),
+                cancel=Mock(wait_for_service=Mock(return_value=cancel),
+                            call_async=Mock(return_value=answered(SimpleNamespace(return_code=cancel_code)))))
+        cases = [(robot(cancel=False), 'stop', 'cancel_unavailable'),
+                 (robot(cancel_code=CancelGoal.Response.ERROR_REJECTED), 'stop', 'cancel_rejected'),
+                 (robot(amcl=0), 'initialpose', 'amcl_not_ready'),
+                 (robot(online=False), 'goal', 'no_pose'),
+                 (robot(nav2=False), 'goal', 'nav2_not_ready'),
+                 (robot(accepted=False), 'goal', 'goal_rejected')]
+        for fake, action, code in cases:
+            with self.subTest(code):
+                with self.assertRaises(CommandError) as caught:
+                    Robot.command(fake, action, dict(x=1, y=2, yaw=0))
+                self.assertEqual(caught.exception.code, code)
 
     def test_timeout_does_not_report_success(self):
         future = Mock()
@@ -85,18 +118,30 @@ class FleetTests(unittest.TestCase):
     def nav_robot(self, lamp_ready=False):
         # DDS 없이 상태 처리 코드만 돌리는 가짜 로봇
         robot = SimpleNamespace(lock=threading.RLock(), goal=dict(id=None, code=0, feedback=None),
-                                targets={}, errors={}, last_odom=time.monotonic(), robot_name='robot1',
+                                targets={}, results={}, sent=None, last_odom=time.monotonic(), robot_name='robot1',
                                 domain=25, pose={'x': 0}, map_id='same', path=[],
                                 navigator=SimpleNamespace(server_is_ready=lambda: True),
-                                lamp_state=None, lamp=None, lamp_client=Mock())
+                                lamp_state=None, lamp=None, lamp_goal=None, lamp_since=0.0, lamp_sent=0.0,
+                                lamp_future=None, lamp_client=Mock())
         robot.lamp_client.service_is_ready.return_value = lamp_ready
+        robot.lamp_client.call_async.side_effect = lambda request: self.lamp_reply()
+        robot.set_lamp = lambda state: Robot.set_lamp(robot, state)
+        robot.send_lamp = lambda state: Robot.send_lamp(robot, state)
+        return robot
+
+    @staticmethod
+    def lamp_reply(answered=True):
+        # 램프 서비스 응답(성공). answered=False면 응답이 끝내 안 온다
         future = Mock()
         future.exception.return_value = None
         future.result.return_value = SimpleNamespace(result=True)
-        future.add_done_callback.side_effect = lambda callback: callback(future)
-        robot.lamp_client.call_async.return_value = future
-        robot.set_lamp = lambda state: Robot.set_lamp(robot, state)
-        return robot
+        if answered:
+            future.add_done_callback.side_effect = lambda callback: callback(future)
+        return future
+
+    @staticmethod
+    def lamp_requests(robot):
+        return [(c.args[0].mode, c.args[0].time) for c in robot.lamp_client.call_async.call_args_list]
 
     def test_lamp_follows_goal_state_once_per_change(self):
         robot = self.nav_robot(lamp_ready=True)
@@ -106,17 +151,76 @@ class FleetTests(unittest.TestCase):
         sent = [c.args[0] for c in robot.lamp_client.call_async.call_args_list]
         self.assertEqual([(r.mode, r.time) for r in sent], [(2, 500), (1, 0)])
         self.assertEqual((sent[0].color.b, sent[1].color.g), (1.0, 1.0))  # 이동 중 파랑, 도착 초록
-        self.assertEqual(Robot.snapshot(robot)['lamp'], dict(label='초록', ok=True))
+        self.assertEqual(Robot.snapshot(robot)['lamp'], dict(label='초록', ok=True, rgb=[0.0, 1.0, 0.2]))
 
     def test_missing_lamp_node_is_shown_and_retried(self):
         robot = self.nav_robot(lamp_ready=False)
         Robot.on_status(robot, self.status((1, GoalStatus.STATUS_ABORTED, 1)))
-        self.assertEqual(Robot.snapshot(robot)['lamp'], dict(label='빨강 빠른 깜빡임', ok=False))
+        self.assertEqual(Robot.snapshot(robot)['lamp'], dict(label='빨강 빠른 깜빡임', ok=False, rgb=[1.0, 0.0, 0.0]))
         robot.lamp_client.call_async.assert_not_called()
         robot.lamp_client.service_is_ready.return_value = True  # 램프 노드가 늦게 켜짐
-        Robot.retry_lamp(robot)
-        self.assertEqual(robot.lamp_client.call_async.call_args.args[0].mode, 2)
+        Robot.check_lamp(robot)
+        self.assertEqual(self.lamp_requests(robot), [(2, 250)])
         self.assertTrue(Robot.snapshot(robot)['lamp']['ok'])
+
+    def test_unanswered_lamp_request_is_retried(self):
+        robot = self.nav_robot(lamp_ready=True)
+        robot.lamp_client.call_async.side_effect = [self.lamp_reply(answered=False), self.lamp_reply()]
+        Robot.on_status(robot, self.status((1, GoalStatus.STATUS_EXECUTING, 1)))
+        Robot.check_lamp(robot)  # 아직 기다리는 중
+        self.assertIsNone(Robot.snapshot(robot)['lamp']['ok'])
+        robot.lamp_sent -= dashboard.LAMP_TIMEOUT + 1  # 응답이 끝내 안 온다
+        robot.lamp_client.service_is_ready.return_value = False
+        Robot.check_lamp(robot)
+        self.assertIs(Robot.snapshot(robot)['lamp']['ok'], False)  # 보내는 중에 멈추지 않고 실패로 보인다
+        robot.lamp_client.remove_pending_request.assert_called_once()  # 답 없는 요청은 버려서 쌓이지 않는다
+        robot.lamp_client.service_is_ready.return_value = True
+        Robot.check_lamp(robot)
+        self.assertEqual(self.lamp_requests(robot), [(2, 500), (2, 500)])
+        self.assertTrue(Robot.snapshot(robot)['lamp']['ok'])
+
+    def test_rejected_lamp_is_retried_only_after_timeout(self):
+        robot = self.nav_robot(lamp_ready=True)
+        rejected = self.lamp_reply()
+        rejected.result.return_value = SimpleNamespace(result=False)
+        robot.lamp_client.call_async.side_effect = [rejected, self.lamp_reply()]
+        Robot.on_status(robot, self.status((1, GoalStatus.STATUS_EXECUTING, 1)))
+        Robot.check_lamp(robot)  # 방금 거부당했다: 바로 다시 보내지 않는다(1초마다 깜빡이지 않게)
+        self.assertEqual(len(self.lamp_requests(robot)), 1)
+        robot.lamp_sent -= dashboard.LAMP_TIMEOUT + 1
+        Robot.check_lamp(robot)
+        self.assertEqual(len(self.lamp_requests(robot)), 2)
+        self.assertTrue(Robot.snapshot(robot)['lamp']['ok'])
+
+    def test_finished_goal_lamp_returns_to_idle_after_hold(self):
+        for code, label in ((GoalStatus.STATUS_SUCCEEDED, '초록'), (GoalStatus.STATUS_CANCELED, '노랑')):
+            with self.subTest(label):
+                robot = self.nav_robot(lamp_ready=True)
+                Robot.on_status(robot, self.status((1, code, 1)))
+                Robot.check_lamp(robot)  # 잠깐은 결과 색을 보여 준다
+                self.assertEqual(Robot.snapshot(robot)['lamp']['label'], label)
+                robot.lamp_since -= dashboard.LAMP_HOLD + 1
+                Robot.check_lamp(robot)
+                Robot.on_status(robot, self.status((1, code, 1)))  # 같은 결과가 또 와도 대기로 둔다
+                Robot.check_lamp(robot)
+                self.assertEqual(self.lamp_requests(robot), [(1, 0), (3, 1000)])
+                self.assertEqual(Robot.snapshot(robot)['lamp'], dict(label='흰색 숨쉬기', ok=True, rgb=[1.0, 1.0, 1.0]))
+
+    def test_aborted_lamp_stays_red_until_next_goal(self):
+        robot = self.nav_robot(lamp_ready=True)
+        Robot.on_status(robot, self.status((1, GoalStatus.STATUS_ABORTED, 1)))
+        robot.lamp_since -= dashboard.LAMP_HOLD + 60
+        Robot.check_lamp(robot)  # 실패는 경보라서 시간이 지나도 빨강
+        self.assertEqual(Robot.snapshot(robot)['lamp']['label'], '빨강 빠른 깜빡임')
+        Robot.on_status(robot, self.status((1, GoalStatus.STATUS_ABORTED, 1), (2, GoalStatus.STATUS_ACCEPTED, 2)))
+        self.assertEqual(self.lamp_requests(robot), [(2, 250), (2, 500)])
+
+    def test_no_goals_means_idle_lamp(self):
+        robot = self.nav_robot(lamp_ready=True)
+        Robot.on_status(robot, GoalStatusArray())
+        Robot.on_status(robot, GoalStatusArray())
+        self.assertEqual(self.lamp_requests(robot), [(3, 1000)])
+        self.assertEqual(Robot.snapshot(robot)['nav']['state'], 'idle')
 
     @staticmethod
     def status(*goals):
@@ -149,18 +253,34 @@ class FleetTests(unittest.TestCase):
         self.assertEqual(nav['state'], 'accepted')
         self.assertIsNone(nav['feedback'])  # 새 목표면 진행 정보를 비운다
 
-    def test_abort_reason_comes_from_nav2_error_code(self):
+    @staticmethod
+    def result(status, code, msg=''):
+        # get_result_async가 돌려주는 응답: 결과 상태 + NavigateToPose 결과
+        response = NavigateToPose.Impl.GetResultService.Response(status=status)
+        response.result.error_code, response.result.error_msg = code, msg
+        return Mock(result=Mock(return_value=response))
+
+    def test_abort_reason_comes_from_nav2_result(self):
         robot = self.nav_robot()
         Robot.on_status(robot, self.status((7, GoalStatus.STATUS_ABORTED, 1)))
         goal_id = robot.goal['id']
-        done = lambda code, msg='': Mock(result=Mock(return_value=SimpleNamespace(
-            result=SimpleNamespace(error_code=code, error_msg=msg))))
-        Robot.on_result(robot, goal_id, done(0))
-        self.assertIsNone(Robot.snapshot(robot)['nav']['error'])
-        Robot.on_result(robot, goal_id, done(208))
-        self.assertEqual(Robot.snapshot(robot)['nav']['error'], '갈 수 있는 경로 없음 (코드 208)')
-        Robot.on_result(robot, goal_id, done(150, 'custom'))
-        self.assertEqual(Robot.snapshot(robot)['nav']['error'], 'custom (코드 150)')
+        cases = [(0, '', '이유 코드 없음 (Nav2 복구를 다 써도 실패)'),  # 복구를 다 쓰고 실패하면 코드가 0이다
+                 (208, '', '갈 수 있는 경로 없음 (코드 208)'),
+                 (104, '', '제어 실패가 계속됨 — 앞이 막혔을 수 있음(collision ahead 등) (코드 104)'),
+                 (150, 'custom', 'custom (코드 150)'),
+                 (9000, '', '알 수 없는 오류 (코드 9000)')]  # 표에 없고 설명도 없는 코드
+        for code, msg, reason in cases:
+            Robot.on_result(robot, goal_id, self.result(GoalStatus.STATUS_ABORTED, code, msg))
+            nav = Robot.snapshot(robot)['nav']
+            self.assertEqual((nav['error'], nav['error_code']), (reason, code))
+
+    def test_success_has_code_but_no_reason(self):
+        robot = self.nav_robot()
+        Robot.on_status(robot, self.status((7, GoalStatus.STATUS_SUCCEEDED, 1)))
+        self.assertIsNone(Robot.snapshot(robot)['nav']['error_code'])  # 결과를 아직 모른다
+        Robot.on_result(robot, robot.goal['id'], self.result(GoalStatus.STATUS_SUCCEEDED, 0))
+        nav = Robot.snapshot(robot)['nav']
+        self.assertEqual((nav['error'], nav['error_code']), (None, 0))
 
     def test_remember_keeps_only_recent_goals(self):
         table = {}
@@ -174,40 +294,62 @@ class FleetTests(unittest.TestCase):
         Robot.update_pose(robot)
         self.assertIsNone(robot.pose)
 
-    def test_http_invalid_robot_returns_error(self):
-        handler_class = handler_for(self.fleet)
-        handler = object.__new__(handler_class)
-        handler.path = '/api/robots/robot3/goal'
-        handler.headers = {'Content-Type': 'application/json', 'Content-Length': '2'}
-        handler.rfile = io.BytesIO(b'{}')
+    def post(self, path, payload, content_type='application/json'):
+        # 서버 소켓 없이 POST 처리만 돌린다. (HTTP 상태, 응답 본문)
+        handler = object.__new__(handler_for(self.fleet))
+        body = json.dumps(payload).encode()
+        handler.path = path
+        handler.headers = {'Content-Type': content_type, 'Content-Length': str(len(body))}
+        handler.rfile = io.BytesIO(body)
         handler.send = Mock()
         handler.do_POST()
-        self.assertEqual(handler.send.call_args.args[0], 400)
+        return handler.send.call_args.args
+
+    def test_http_invalid_robot_returns_error(self):
+        status, body = self.post('/api/robots/robot3/goal', {})
+        self.assertEqual((status, body['success'], body['code']), (400, False, 'unknown_route'))
         self.one.command.assert_not_called()
 
+    def test_http_errors_carry_code(self):
+        self.two.map_id = 'different'
+        self.one.command.side_effect = CommandError('Nav2가 아직 준비되지 않았습니다.', 'nav2_not_ready')
+        goal = dict(x=1, y=2, yaw=0)
+        cases = [('/api/robots/robot2/goal', 'application/json', 'map_mismatch'),
+                 ('/api/robots/robot1/goal', 'application/json', 'nav2_not_ready'),  # 로봇이 낸 코드도 그대로
+                 ('/api/robot1/goal', 'application/json', 'unknown_route'),
+                 ('/api/robots/robot1/goal', 'text/plain', None)]
+        for path, content_type, code in cases:
+            with self.subTest(path=path, code=code):
+                status, body = self.post(path, goal, content_type)
+                self.assertEqual((status, body['success'], body['code']), (400, False, code))
+                self.assertTrue(body['error'])
+
     def test_http_goal_routing(self):
-        handler = object.__new__(handler_for(self.fleet))
-        handler.path = '/api/robots/robot2/goal'
-        payload = json.dumps(dict(x=1, y=2, yaw=0)).encode()
-        handler.headers = {'Content-Type': 'application/json', 'Content-Length': str(len(payload))}
-        handler.rfile = io.BytesIO(payload)
-        handler.send = Mock()
-        handler.do_POST()
-        self.assertEqual(handler.send.call_args.args[0], 200)
+        status, _ = self.post('/api/robots/robot2/goal', dict(x=1, y=2, yaw=0))
+        self.assertEqual(status, 200)
         self.two.command.assert_called_once()
         self.one.command.assert_not_called()
 
-    def test_pose_age_uses_node_clock(self):
-        # Gazebo TF 스탬프는 시뮬 시간이라 노드 시계도 시뮬 시간일 때만 신선하다.
+    def test_pose_freshness_uses_arrival_time_not_the_robot_clock(self):
+        # 로봇 시계가 PC와 한참 달라도(인터넷 없는 공유기, 시뮬 시간) 새 값이 계속 들어오면 그린다
         tf = TransformStamped()
-        tf.header.stamp.sec = 100
+        tf.header.stamp.sec = 100                       # PC 시계와 전혀 다른 시각
         tf.transform.rotation.w = 1.0
-        for now, visible in ((100.5, True), (1.79e9, False)):
-            robot = SimpleNamespace(lock=threading.RLock(), pose=None, buffer=Mock(),
-                                    get_clock=lambda now=now: SimpleNamespace(now=lambda: Time(seconds=now)))
-            robot.buffer.lookup_transform.return_value = tf
+        robot = SimpleNamespace(lock=threading.RLock(), pose=None, buffer=Mock())
+        robot.buffer.lookup_transform.return_value = tf
+        with patch.object(dashboard.time, 'monotonic', return_value=1000.0):
             Robot.update_pose(robot)
-            self.assertEqual(robot.pose is not None, visible)
+        self.assertIsNotNone(robot.pose)
+        with patch.object(dashboard.time, 'monotonic', return_value=1001.5):
+            Robot.update_pose(robot)                    # 같은 값이 1.5초째: 아직 보인다
+        self.assertIsNotNone(robot.pose)
+        with patch.object(dashboard.time, 'monotonic', return_value=1002.5):
+            Robot.update_pose(robot)                    # 2초 넘게 새 값이 없다: 숨긴다
+        self.assertIsNone(robot.pose)
+        tf.header.stamp.sec = 101                       # 새 값이 들어오면 다시 보인다
+        with patch.object(dashboard.time, 'monotonic', return_value=1003.0):
+            Robot.update_pose(robot)
+        self.assertIsNotNone(robot.pose)
 
     def run_dashboard(self, *argv):
         with patch.object(dashboard, 'Robot') as robot, \
@@ -233,6 +375,123 @@ class FleetTests(unittest.TestCase):
             self.assertTrue(robot.get_clock().ros_time_is_active)
         finally:
             robot.close()
+
+
+class TrafficRobot:
+    """교통 정리 시험용 가짜 로봇: 위치·목표 진행 여부만 있고, 받은 명령을 기록한다."""
+    def __init__(self, name, x, y, active=False):
+        self.name, self.pose, self.active = name, dict(x=x, y=y, yaw=0.0), active
+        self.lock = threading.RLock()
+        self.map_id, self.map_data = 'same', GOOD3
+        self.command = Mock(return_value='목적지 수락')
+
+    def snapshot(self):
+        return dict(id=self.name, map_id=self.map_id, online=True, pose=self.pose,
+                    nav=dict(active=self.active))
+
+
+GOOD3 = dict(width=84, height=56, resolution=0.05, origin=dict(x=-1.067, y=-0.171, yaw=0.0))
+ZONES = Path(__file__).resolve().parents[1] / 'params' / 'traffic_good3.yaml'
+
+
+class TrafficFleetTests(unittest.TestCase):
+    def setUp(self):
+        self.r1, self.r2 = TrafficRobot('robot1', 0.5, 0.5), TrafficRobot('robot2', 2.0, 0.5)
+        self.fleet = Fleet(dict(robot1=self.r1, robot2=self.r2), dashboard.load_zones(ZONES))
+
+    def goal(self, robot, x, y):
+        return self.fleet.command(robot, 'goal', dict(x=x, y=y, yaw=0.0))
+
+    def test_crossing_goal_waits_and_leaves_by_itself_when_the_door_frees(self):
+        self.goal('robot1', 2.10, 1.05)
+        self.r1.command.assert_called_once_with('goal', dict(x=2.10, y=1.05, yaw=0.0))
+        self.r1.active = True
+        message = self.goal('robot2', 0.30, 1.00)
+        self.assertIn('칸 대기', message)
+        self.r2.command.assert_not_called()                                 # Nav2로 안 보냈다
+        self.assertEqual(self.fleet.state()['traffic']['routes'], {'robot1': ['left_bottom', 'left_top', 'right_front']})
+        self.fleet.traffic_tick()
+        self.r2.command.assert_not_called()                                 # robot1 이동 중
+        self.fleet.gate.granted['robot1'] -= 10                          # 건너는 데 시간이 흘렀다(출발 유예 5초 지남)
+        self.r1.active, self.r1.pose = False, dict(x=2.10, y=1.05, yaw=0.0)  # 도착, 문에서 벗어남
+        self.fleet.traffic_tick()
+        self.r2.command.assert_called_once_with('goal', dict(x=0.30, y=1.00, yaw=0.0))
+        self.assertIn('칸이 비어 자동 출발', self.fleet.state()['traffic']['note'])
+
+    def test_holding_stops_a_robot_that_was_going_elsewhere(self):
+        self.goal('robot1', 2.10, 1.05)
+        self.r1.active = self.r2.active = True
+        self.goal('robot2', 0.30, 1.00)
+        self.r2.command.assert_called_once_with('stop', {})
+
+    def test_goal_next_to_the_door_or_on_a_parked_robot_is_rejected(self):
+        for (x, y), code in (((1.60, 1.05), 'near_zone'), ((1.95, 0.35), 'near_robot')):
+            with self.subTest(code):
+                with self.assertRaises(CommandError) as caught:
+                    self.goal('robot1', x, y)
+                self.assertEqual(caught.exception.code, code)
+        self.r1.command.assert_not_called()
+
+    def test_stop_forgets_the_waiting_goal(self):
+        self.goal('robot1', 2.10, 1.05)
+        self.r1.active = True
+        self.goal('robot2', 0.30, 1.00)
+        self.fleet.command('robot2', 'stop', {})
+        self.fleet.gate.granted['robot1'] -= 10
+        self.r1.active, self.r1.pose = False, dict(x=2.10, y=1.05, yaw=0.0)
+        self.fleet.traffic_tick()
+        self.assertEqual([c.args[0] for c in self.r2.command.call_args_list], ['stop'])  # 자동 출발 없음
+
+    def test_timeout_keeps_the_keys_but_a_clear_failure_returns_them(self):
+        # Wi-Fi가 느려 4초를 넘기면 목표가 닿았을 수 있다: 열쇠를 쥔 채 둔다
+        self.r1.command.side_effect = TimeoutError('응답 시간 초과')
+        with self.assertRaises(TimeoutError):
+            self.goal('robot1', 2.10, 1.05)
+        self.assertEqual(self.fleet.gate.owner['right_front'], 'robot1')
+        self.fleet.gate.release_all('robot1')
+        self.r1.command.side_effect = CommandError('Nav2가 목적지를 거부했습니다.', 'goal_rejected')
+        with self.assertRaises(CommandError):
+            self.goal('robot1', 2.10, 1.05)
+        self.assertIsNone(self.fleet.gate.owner['right_front'])   # 확실히 못 보냄: 반납
+
+    def test_rejected_new_goal_still_clears_the_old_waiting_goal(self):
+        self.goal('robot1', 2.10, 1.05)
+        self.r1.active = True
+        self.goal('robot2', 0.30, 1.00)                            # 대기
+        with self.assertRaises(CommandError):
+            self.goal('robot2', 1.60, 1.05)                        # 문 안: 거절
+        self.assertEqual(self.fleet.gate.pending, [])              # 옛 대기 목표가 나중에 출발하지 않는다
+
+    def test_hold_is_refused_when_the_old_goal_cannot_be_stopped(self):
+        self.goal('robot1', 2.10, 1.05)
+        self.r1.active = self.r2.active = True
+        self.r2.command.side_effect = TimeoutError('응답 시간 초과')   # 멈추기 실패
+        with self.assertRaises(CommandError) as caught:
+            self.goal('robot2', 0.30, 1.00)
+        self.assertEqual(caught.exception.code, 'hold_stop_failed')
+        self.assertEqual(self.fleet.gate.pending, [])
+
+    def test_cancel_on_a_waiting_robot_is_a_success(self):
+        self.goal('robot1', 2.10, 1.05)
+        self.r1.active = True
+        self.goal('robot2', 0.30, 1.00)
+        self.r2.command.side_effect = CommandError('Nav2가 취소 요청을 수락하지 않았습니다.', 'cancel_rejected')
+        self.assertIn('대기 목표 취소', self.fleet.command('robot2', 'stop', {}))
+
+    def test_wrong_map_turns_traffic_control_off(self):
+        self.r1.map_data = self.r2.map_data = dict(GOOD3, width=90)
+        self.fleet.traffic_tick()
+        self.assertIn('교통 정리 꺼짐', self.fleet.state()['traffic']['off'])
+        self.goal('robot1', 2.10, 1.05)
+        self.goal('robot2', 0.30, 1.00)
+        self.r2.command.assert_called_once()                                # 꺼지면 그냥 보낸다
+
+    def test_just_sent_goal_counts_as_active_until_nav2_reports_it(self):
+        robot = FleetTests.nav_robot(FleetTests())
+        robot.sent = dict(id='ab' * 16, at=time.monotonic())
+        self.assertTrue(Robot.snapshot(robot)['nav']['active'])            # 상태가 아직 안 옴
+        robot.sent['at'] -= 11
+        self.assertFalse(Robot.snapshot(robot)['nav']['active'])           # 10초 넘게 안 오면 진행 중 아님
 
 
 class SimLampTests(unittest.TestCase):
@@ -273,11 +532,13 @@ class SimLaunchTests(unittest.TestCase):
 
 LAUNCH_FILE = Path(__file__).resolve().parents[1] / 'launch' / 'multi_robot.launch.py'
 ISOLATED = {'ROS_AUTOMATIC_DISCOVERY_RANGE': 'LOCALHOST', 'ROS_STATIC_PEERS': '',
-            'FASTRTPS_DEFAULT_PROFILES_FILE': '', 'ROS_DISCOVERY_SERVER': ''}
+            'FASTRTPS_DEFAULT_PROFILES_FILE': '', 'ROS_DISCOVERY_SERVER': '',
+            'ROS_SUPER_CLIENT': '', 'CYCLONEDDS_URI': ''}
+REAL, SIM = ('15', '17'), ('25', '27')  # 도메인: 실물, 시뮬
 
 
 class LaunchTests(unittest.TestCase):
-    def start(self, use_sim_time, env=ISOLATED, poses=('', '')):
+    def start(self, use_sim_time, domains, env=ISOLATED, poses=('', ''), traffic_zones=''):
         spec = importlib.util.spec_from_file_location('multi_robot_launch', LAUNCH_FILE)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -289,8 +550,9 @@ class LaunchTests(unittest.TestCase):
         context = LaunchContext()
         context.launch_configurations.update(
             map=str(LAUNCH_FILE.parents[1] / 'maps' / 'good3.yaml'), params_file=str(params),
-            robot1_domain='15', robot2_domain='17', host='127.0.0.1', port='8080',
-            use_sim_time=use_sim_time, robot1_initial_pose=poses[0], robot2_initial_pose=poses[1])
+            robot1_domain=domains[0], robot2_domain=domains[1], host='127.0.0.1', port='8080',
+            use_sim_time=use_sim_time, robot1_initial_pose=poses[0], robot2_initial_pose=poses[1],
+            traffic_zones=traffic_zones)
         with patch.dict(os.environ, env):
             actions = module.start(context)
         self.actions = actions  # 살려 둬야 임시 params 파일이 지워지지 않는다
@@ -300,8 +562,13 @@ class LaunchTests(unittest.TestCase):
                         for k, v in p.additional_env or []).get('ROS_DOMAIN_ID') for p in processes]
         return cmds, domains
 
+    def test_traffic_zones_reach_the_dashboard(self):
+        cmds, _ = self.start('false', ('15', '17'), env={}, traffic_zones='/zones/traffic_good3.yaml')
+        self.assertEqual(cmds[2][-2:], ['--traffic-zones', '/zones/traffic_good3.yaml'])
+        self.assertTrue(LAUNCH_FILE.with_name('multi_robot.launch.py').read_text().count("'traffic_good3.yaml'"))  # 기본값
+
     def test_real_mode_is_unchanged(self):
-        cmds, domains = self.start('false', env={})
+        cmds, domains = self.start('false', REAL, env={})
         self.assertEqual(domains, ['15', '17', None])
         for cmd in cmds[:2]:
             self.assertEqual(cmd[:4], ['ros2', 'launch', 'pinky_navigation', 'bringup_launch.xml'])
@@ -312,15 +579,15 @@ class LaunchTests(unittest.TestCase):
                                    '--host', '127.0.0.1', '--port', '8080'])
 
     def test_generated_params_wait_for_initial_pose(self):
-        cmds, _ = self.start('false', env={})
+        cmds, _ = self.start('false', REAL, env={})
         config = yaml.safe_load(Path(cmds[0][5].removeprefix('params_file:=')).read_text())
         self.assertFalse(config['amcl']['ros__parameters']['set_initial_pose'])
         for costmap in ('global_costmap', 'local_costmap'):
             self.assertEqual(config[costmap][costmap]['ros__parameters']['initial_transform_timeout'], 600.0)
 
     def test_gazebo_mode_runs_both_nav2_on_sim_time(self):
-        cmds, domains = self.start('True')
-        self.assertEqual(domains, ['15', '17', None])
+        cmds, domains = self.start('True', SIM)
+        self.assertEqual(domains, ['25', '27', None])
         self.assertTrue(all('use_sim_time:=True' in c for c in cmds[:2]))
         self.assertIn('--use-sim-time', cmds[2])
 
@@ -328,20 +595,28 @@ class LaunchTests(unittest.TestCase):
         for key, value in (('ROS_AUTOMATIC_DISCOVERY_RANGE', 'SUBNET'),
                            ('ROS_STATIC_PEERS', '192.168.0.2'),
                            ('FASTRTPS_DEFAULT_PROFILES_FILE', '/home/x/.ros/wifi.xml'),
-                           ('ROS_DISCOVERY_SERVER', '192.168.0.5:11811')):
-            with self.assertRaises(RuntimeError):
-                self.start('true', env={**ISOLATED, key: value})
+                           ('ROS_DISCOVERY_SERVER', '192.168.0.5:11811'),
+                           ('ROS_SUPER_CLIENT', 'true'),
+                           ('CYCLONEDDS_URI', 'file:///home/x/.ros/cyclone.xml')):
+            with self.subTest(key), self.assertRaisesRegex(RuntimeError, key):  # 무엇을 고칠지 메시지에 나온다
+                self.start('true', SIM, env={**ISOLATED, key: value})
+
+    def test_gazebo_mode_refuses_real_robot_domains(self):
+        # 시뮬 Nav2가 실물 로봇 도메인에 붙으면 실물에 cmd_vel을 보낼 수 있다
+        for domains in (REAL, ('25', '17'), ('15', '27')):
+            with self.subTest(domains), self.assertRaisesRegex(RuntimeError, 'robot1_domain:=25 robot2_domain:=27'):
+                self.start('true', domains)
 
     def test_rejects_unknown_use_sim_time(self):
         with self.assertRaises(RuntimeError):
-            self.start('yes')
+            self.start('yes', SIM)
 
     def test_real_mode_shares_one_params_waiting_for_pose(self):
-        cmds, _ = self.start('false', env={})
+        cmds, _ = self.start('false', REAL, env={})
         self.assertEqual(cmds[0][5], cmds[1][5])
 
     def test_known_start_pose_is_set_when_amcl_starts(self):
-        cmds, _ = self.start('true', poses=('0.5,0.5,0', '2.0, 0.5, 1.57'))
+        cmds, _ = self.start('true', SIM, poses=('0.5,0.5,0', '2.0, 0.5, 1.57'))
         amcl = [yaml.safe_load(Path(c[5].removeprefix('params_file:=')).read_text())['amcl']['ros__parameters']
                 for c in cmds[:2]]
         self.assertTrue(amcl[0]['set_initial_pose'] and amcl[1]['set_initial_pose'])
@@ -349,14 +624,14 @@ class LaunchTests(unittest.TestCase):
         self.assertEqual(amcl[1]['initial_pose'], dict(x=2.0, y=0.5, z=0.0, yaw=1.57))
 
     def test_pose_only_for_one_robot_keeps_the_other_waiting(self):
-        cmds, _ = self.start('true', poses=('0.5,0.5,0', ''))
+        cmds, _ = self.start('true', SIM, poses=('0.5,0.5,0', ''))
         second = yaml.safe_load(Path(cmds[1][5].removeprefix('params_file:=')).read_text())
         self.assertFalse(second['amcl']['ros__parameters']['set_initial_pose'])
 
     def test_rejects_malformed_initial_pose(self):
         for text in ('0.5,0.5', 'a,b,c', 'nan,0,0', '1,2,3,4'):
             with self.assertRaises(RuntimeError):
-                self.start('true', poses=(text, ''))
+                self.start('true', SIM, poses=(text, ''))
 
 
 if __name__ == '__main__':

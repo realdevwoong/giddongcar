@@ -13,6 +13,12 @@ from launch.event_handlers import OnProcessExit, OnShutdown
 from launch.events import Shutdown
 from launch.substitutions import LaunchConfiguration
 
+# 실물 로봇 도메인(robot1, robot2). launch 인자 기본값도 여기서 가져간다. 시뮬 Nav2는 이 도메인에 붙으면 안 된다.
+REAL_DOMAINS = (15, 17)
+# 실물용 DDS 설정. 시뮬에서 남아 있으면 이 PC 밖(실물 로봇)과 통신할 수 있다. sim.launch.py가 지우는 것과 같다.
+REAL_DDS_ENV = ('ROS_STATIC_PEERS', 'FASTRTPS_DEFAULT_PROFILES_FILE', 'ROS_DISCOVERY_SERVER',
+                'ROS_SUPER_CLIENT', 'CYCLONEDDS_URI')
+
 
 def parse_pose(text, name):
     """'x,y,yaw' -> (x, y, yaw). 비어 있으면 None: 사람이 대시보드에서 찍을 때까지 기다린다."""
@@ -37,14 +43,14 @@ def start(context):
     if sim not in ('true', 'false'):
         raise RuntimeError('use_sim_time은 true 또는 false여야 합니다')
     sim = sim == 'true'
-    # 시뮬 Nav2가 실물 로봇에 cmd_vel을 보내는 사고를 막는다. 실물용 DDS 설정이 남아 있으면 시작하지 않는다.
+    # 시뮬 Nav2가 실물 로봇에 cmd_vel을 보내는 사고를 막는다. 실물 도메인이거나 실물용 DDS 설정이 남아 있으면 시작하지 않는다.
+    if sim and set(domains) & set(REAL_DOMAINS):
+        raise RuntimeError(f'Gazebo 모드에서는 실물 로봇 도메인 {REAL_DOMAINS[0]}/{REAL_DOMAINS[1]}을 쓸 수 없습니다: '
+                           'robot1_domain:=25 robot2_domain:=27로 띄우세요')
     if sim and (os.environ.get('ROS_AUTOMATIC_DISCOVERY_RANGE') != 'LOCALHOST'
-                or os.environ.get('ROS_STATIC_PEERS')
-                or os.environ.get('FASTRTPS_DEFAULT_PROFILES_FILE')
-                or os.environ.get('ROS_DISCOVERY_SERVER')):
+                or any(os.environ.get(key) for key in REAL_DDS_ENV)):
         raise RuntimeError('Gazebo 모드는 이 PC 안에서만 통신해야 합니다: '
-                           'export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST; '
-                           'unset ROS_STATIC_PEERS FASTRTPS_DEFAULT_PROFILES_FILE ROS_DISCOVERY_SERVER')
+                           'export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST; unset ' + ' '.join(REAL_DDS_ENV))
     map_path = Path(value('map')).expanduser().resolve()
     with map_path.open() as stream:
         map_config = yaml.safe_load(stream)
@@ -84,7 +90,8 @@ def start(context):
         cmd=[str(dashboard),
              '--robot1-domain', str(domains[0]), '--robot2-domain', str(domains[1]),
              '--host', value('host'), '--port', value('port')]
-            + (['--use-sim-time'] if sim else []), output='screen'))
+            + (['--use-sim-time'] if sim else [])
+            + (['--traffic-zones', value('traffic_zones')] if value('traffic_zones') else []), output='screen'))
     handlers = [RegisterEventHandler(OnProcessExit(
         target_action=p, on_exit=[EmitEvent(event=Shutdown(reason='A fleet process exited'))]))
         for p in processes]
@@ -103,8 +110,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('map', default_value=str(fleet / 'maps' / 'good3.yaml')),
         DeclareLaunchArgument('params_file', default_value=str(pinky / 'params/nav2_params.yaml')),
-        DeclareLaunchArgument('robot1_domain', default_value='15'),
-        DeclareLaunchArgument('robot2_domain', default_value='17'),
+        DeclareLaunchArgument('robot1_domain', default_value=str(REAL_DOMAINS[0])),
+        DeclareLaunchArgument('robot2_domain', default_value=str(REAL_DOMAINS[1])),
         DeclareLaunchArgument('host', default_value='127.0.0.1'),
         DeclareLaunchArgument('port', default_value='8080'),
         DeclareLaunchArgument('use_sim_time', default_value='false',
@@ -112,5 +119,8 @@ def generate_launch_description():
         DeclareLaunchArgument('robot1_initial_pose', default_value='',
                               description='"x,y,yaw" (map 좌표). 비우면 대시보드에서 초기 위치를 찍을 때까지 기다린다'),
         DeclareLaunchArgument('robot2_initial_pose', default_value=''),
+        DeclareLaunchArgument('traffic_zones', default_value=str(fleet / 'params' / 'traffic_good3.yaml'),
+                              description='교통 정리 구역 YAML(좁은 문에 한 대씩). 비우면(traffic_zones:=) 끈다. '
+                                          '지도가 구역 파일과 다르면 대시보드가 스스로 끈다'),
         OpaqueFunction(function=start),
     ])
