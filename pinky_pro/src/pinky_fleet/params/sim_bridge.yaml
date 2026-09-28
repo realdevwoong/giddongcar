@@ -1,6 +1,8 @@
 # 로봇 한 대분 Gazebo <-> ROS 연결표. sim.launch.py가 로봇마다 한 번씩, 그 로봇의 도메인에서 쓴다.
-# ROS 이름은 '/'로 시작: 실물 로봇처럼 네임스페이스 없이 /scan, /odom ...
-# Gazebo 이름은 '/' 없이: 브리지 노드의 네임스페이스(robot1)가 앞에 붙어 /robot1/scan ...
+# ROS 이름은 일부러 절대 이름('/'로 시작). AGENTS.md '토픽은 상대 이름'의 예외다:
+#   로봇마다 도메인이 따로라서 실물 pinky_bringup처럼 네임스페이스 없는 /scan, /odom, /cmd_vel을 내야
+#   관제 코드가 시뮬과 실물에서 똑같이 돈다. 상대 이름이면 브리지 네임스페이스가 붙어 /robot1/scan이 된다.
+# Gazebo 이름은 '/' 없이: 두 로봇이 한 가제보에 있으니 브리지 네임스페이스(robot1)를 붙여 /robot1/scan ...
 #   (브리지 노드에 expand_gz_topic_names: true 를 줬을 때만 붙는다)
 - ros_topic_name: /clock
   gz_topic_name: /clock        # 월드 시계는 하나. 두 브리지가 같이 받아 각자 도메인에 낸다
@@ -33,6 +35,9 @@
   ros_type_name: sensor_msgs/msg/Image
   gz_type_name: gz.msgs.Image
   direction: GZ_TO_ROS
+  # ROS 쪽에 구독자가 있을 때만 가제보 카메라를 구독한다. 아무도 안 보면 렌더링·변환을 안 해 CPU를 아낀다.
+  # 나머지(clock, tf, odom, scan, cmd_vel)는 Nav2가 늘 쓰니 lazy를 켜지 않는다.
+  lazy: true
 
 - ros_topic_name: /cmd_vel
   gz_topic_name: cmd_vel

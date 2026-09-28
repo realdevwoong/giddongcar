@@ -41,7 +41,8 @@ cd src/pinky_fleet && python3 -m pytest test
 - 실물 로봇을 움직이는 명령(`cmd_vel` 발행, Nav2 목표)은 사람 확인 없이 실행하지 않는다.
 - ⚠️ `pinky_bringup`은 `cmd_vel`이 끊겨도 마지막 속도로 계속 달린다. 조종을 끝내면 0 속도를 한 번 보낸다.
 - 도메인은 실물 15/17, 시뮬 25/27. 시뮬은 이 PC 안에서만 통신하게 격리한다(`sim.launch.py`가 자동으로 한다).
-- 경로·IP·도메인을 코드에 박지 않는다. launch 인자나 파라미터로 받는다. 토픽은 상대 이름(`cmd_vel`). `use_sim_time`은 launch에서 넘긴다.
+- 경로·IP·도메인을 코드에 박지 않는다. launch 인자나 파라미터로 받는다. `use_sim_time`은 launch에서 넘긴다.
+- 우리가 짜는 노드 코드의 토픽은 상대 이름(`cmd_vel`). 예외: 시뮬 브리지 표(`pinky_fleet/params/sim_bridge.yaml`)는 실물과 같은 전역 이름(`/scan`)을 내려고 ROS 쪽을 절대 이름으로 쓴다.
 - 커밋 금지: `build/` `install/` `log/`, 대용량(rosbag·영상·모델 가중치), 비밀번호·토큰.
 - 변경은 작게, 한 커밋에 한 목적. 수정 후 해당 패키지를 빌드·테스트하고, 직접 실행 못 한 부분은 그렇다고 밝힌다.
 - 설명과 커밋 메시지는 한국어, 코드 식별자는 영어.
