@@ -16,13 +16,14 @@ source install/setup.bash
 ros2 launch pinky_fleet sim.launch.py
 ```
 
-브라우저에서 http://localhost:8080 을 연다.
+브라우저에서 http://localhost:8080 을 연다. 버튼·단축키는 [대시보드 사용법](../pinky_pro/src/pinky_fleet/README.md#대시보드-사용법).
 
-1. 초기 위치는 **자동으로 잡힌다**(생성 위치 robot1 (0.5, 0.5), robot2 (2.0, 0.5)). 지도에 두 로봇 화살표가 뜨면 준비 끝.
-2. "목적지 지정"으로 목표를 드래그한다. 두 로봇에 동시에 보내도 된다.
-3. 가제보에서 로봇을 손으로 옮겼거나 화살표가 실제와 다르면 "초기 위치 설정"으로 다시 찍는다.
+1. 초기 위치는 **자동으로 잡힌다**(생성 위치 robot1 (0.5, 0.5), robot2 (2.0, 0.5)). 지도에 두 로봇(① ②)이 뜨면 준비 끝.
+2. 로봇 도구줄의 **⚑ 목적지**(`G`)를 누르고 지도에서 누른 채 끌어 목표와 도착 방향을 정한다. 도구는 한 번 쓰면 꺼진다. 두 로봇에 동시에 보내도 된다.
+3. 가제보에서 로봇을 손으로 옮겼거나 지도 위 위치가 실제와 다르면 **↗ 초기 위치**(`P`)로 다시 찍는다.
+4. **■ 이동 취소**는 Nav2 목표만 취소한다(비상정지 아님).
 
-로봇 뒤 램프 색이 목표 상태를 따라 바뀐다(이동 중 파랑 깜빡임, 도착 초록, 실패 빨강 깜빡임, 대기 흰색 숨쉬기). 실물 `pinky_lamp_control`과 같은 `set_lamp` 서비스를 시뮬 전용 `sim_lamp` 노드가 받아 가제보 색으로 바꾼다. 제조사 램프 플러그인(초록 숨쉬기)은 시뮬 URDF에서 뺐다.
+로봇 뒤 램프 색이 목표 상태를 따라 바뀐다(이동 중 파랑 깜빡임, 도착 초록, 실패 빨강 깜빡임, 대기 흰색 숨쉬기). 도착·취소 뒤 약 5초면 흰색 숨쉬기로 돌아가고, 실패하면 다음 목표를 보낼 때까지 빨강으로 남는다(약 15분 뒤 Nav2가 지난 결과를 지우면 흰색으로 돌아간다). 실물 `pinky_lamp_control`과 같은 `set_lamp` 서비스를 시뮬 전용 `sim_lamp` 노드가 받아 가제보 색으로 바꾼다. 제조사 램프 플러그인(초록 숨쉬기)은 시뮬 URDF에서 뺐다.
 
 | 인자 | 기본 | 뜻 |
 |---|---|---|
@@ -53,9 +54,9 @@ ros2 launch pinky_fleet sim.launch.py
 시뮬 Nav2가 실물 로봇에 `cmd_vel`을 보내는 사고를 두 겹으로 막는다.
 
 1. **도메인이 다르다.** 시뮬 25/27, 실물 15/17. 어느 쪽 설정이 어떻든 서로 못 만난다. 이 PC에서 실물용 터미널(도메인 15/17)을 같이 써도 된다.
-2. **`sim.launch.py`가 자식 프로세스를 이 PC 안에 가둔다.** `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`를 걸고 `ROS_STATIC_PEERS`, `FASTRTPS_DEFAULT_PROFILES_FILE`, `ROS_DISCOVERY_SERVER`, `CYCLONEDDS_URI`를 지운다.
+2. **`sim.launch.py`가 자식 프로세스를 이 PC 안에 가둔다.** `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`를 걸고 `ROS_STATIC_PEERS`, `FASTRTPS_DEFAULT_PROFILES_FILE`, `ROS_DISCOVERY_SERVER`, `ROS_SUPER_CLIENT`, `CYCLONEDDS_URI`를 지운다.
 
-`multi_robot.launch.py use_sim_time:=true`를 직접 띄울 때는 위 설정이 안 돼 있으면 실행을 거부한다.
+`multi_robot.launch.py use_sim_time:=true`를 직접 띄울 때는 위 설정이 안 돼 있거나, 도메인이 실물용 15/17이면 실행을 거부한다(`robot1_domain:=25 robot2_domain:=27`을 준다).
 
 시뮬 도메인을 굳이 15/17로 바꾸지 말 것. LOCALHOST만으로는 실물 로봇이 이 PC를 peer로 알고 먼저 찾아오는 경우를 못 막는다.
 
@@ -66,7 +67,8 @@ ros2 launch pinky_fleet sim.launch.py
 시뮬 토픽을 다른 터미널에서 보려면 같은 격리 설정이 필요하다. 설정이 다르면 토픽이 안 보인다.
 
 ```bash
-export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST; unset ROS_STATIC_PEERS FASTRTPS_DEFAULT_PROFILES_FILE
+export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+unset ROS_STATIC_PEERS FASTRTPS_DEFAULT_PROFILES_FILE ROS_DISCOVERY_SERVER ROS_SUPER_CLIENT CYCLONEDDS_URI
 ros2 daemon stop
 ROS_DOMAIN_ID=25 ros2 topic echo /scan --once
 ROS_DOMAIN_ID=27 ros2 run tf2_ros tf2_echo odom base_footprint
@@ -74,7 +76,7 @@ ROS_DOMAIN_ID=25 ros2 run teleop_twist_keyboard teleop_twist_keyboard   # robot1
 ROS_DOMAIN_ID=25 ros2 run rqt_image_view rqt_image_view /camera/image_raw   # robot1 카메라
 ```
 
-카메라 브리지 때문에 가제보 CPU가 늘었다(공장 월드 기준 55% → 132%). 해상도를 낮추는 것은 다음 단계.
+카메라 브리지는 `lazy`라서 누가 `/camera/image_raw`를 구독할 때만(rqt_image_view, `ros2 topic hz` 등) 가제보가 그 로봇 카메라를 렌더링한다. 보는 동안에만 CPU가 크게 는다(두 대 카메라가 늘 켜져 있던 때 공장 월드 기준 55% → 132%). 해상도를 낮추는 것은 다음 단계.
 
 `--no-daemon`은 발견이 덜 된 채 결과를 낼 때가 있다. 위처럼 daemon을 껐다 켜고 몇 초 뒤에 본다.
 
@@ -98,5 +100,5 @@ ros2 run rqt_image_view rqt_image_view                        # 창에서 /camer
 - `at least 2 nodes with the name /robot_state_publisher`: 도메인이 달라 실제 충돌은 없다. 무시.
 - 종료할 때 Nav2 컨테이너가 `Magick: abort due to signal 11`을 내며 죽는다. Nav2 쪽 문제로, 이미 정리가 끝난 뒤라 무시.
 - 토픽이 안 보이면 격리 env가 같은지 확인하고 `ros2 daemon stop` 후 다시 본다.
-- Gazebo를 일시정지하면 `/odom`이 멈춰 대시보드에 "odom 수신 끊김"이 뜬다. 정상.
+- Gazebo를 일시정지하면 `/odom`이 멈춰 대시보드에 "연결 끊김"(odom 2초 넘게 없음)이 뜬다. 정상. 가제보 창 왼쪽 아래 ▶로 다시 돌린다.
 - 초기 위치는 10분 안에 찍으면 된다. 그 뒤엔 Nav2 costmap이 포기하고 되살아나지 않는다(다시 launch).

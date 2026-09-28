@@ -12,21 +12,38 @@ Nav2는 로봇이 아니라 PC에서 돈다. 로봇에서는 bringup만 켠다.
 
 ## 순서
 
+공유기에 인터넷이 없어도 된다. 대신 **로봇 IP 확인**과 **시계 맞추기**를 먼저 한다.
+
 ```bash
-# 로봇에서 (ssh). 로봇 bashrc에 도메인이 이미 설정돼 있으면 앞부분 생략
-ROS_DOMAIN_ID=15 ros2 launch pinky_bringup bringup_robot.launch.xml     # 로봇2는 17
+# ── 1. PC를 로봇 공유기(192.168.0.x)에 붙이고 "새 터미널"을 연다(~/.bashrc가 DDS를 그 WiFi에 묶는다)
+ip -4 -br addr | grep 192.168.0        # PC IP 확인
+pinky-check.sh                         # 2번(네트워크)·4번(로봇 odom)만 보면 된다. 3·5번(브릿지)은 우리 방식에선 무시
 
-# 로봇에서 (선택) 상태 램프: 대시보드가 이동 중 파랑 깜빡임 / 도착 초록 / 실패 빨강 깜빡임으로 바꾼다
-ROS_DOMAIN_ID=15 ros2 run pinky_lamp_control main_node                   # 로봇2는 17. 없으면 대시보드 카드에 "램프 노드 없음"
-# ↑ 학원에서 처음 확인할 것: 램프 드라이버(커널 모듈, pinky_lamp_control/README.md)가 로봇 이미지에 설정돼 있는지, 일반 사용자로 켜지는지
+# ── 2. 로봇 IP 확인: 공유기 관리 페이지(ip route | grep default 의 게이트웨이) 또는 로봇에서 hostname -I
+#    bashrc의 값(.2/.3)과 다르면 이 터미널에서 덮어쓴다
+export ROS_STATIC_PEERS="192.168.0.<로봇1>;192.168.0.<로봇2>"
 
-# PC에서
+# ── 3. 시계 맞추기: 인터넷 시간 동기화가 없어서 로봇 시계가 틀리면 위치가 안 뜨고 Nav2가 TF 오류를 낸다
+for ip in 192.168.0.<로봇1> 192.168.0.<로봇2>; do ssh -t pinky@$ip "sudo date -s @$(date +%s)"; done
+for ip in 192.168.0.<로봇1> 192.168.0.<로봇2>; do echo "$ip 차이: $(( $(ssh pinky@$ip date +%s) - $(date +%s) ))초"; done   # 0~1이면 OK
+
+# ── 4. 로봇에서 (ssh pinky@<IP>). 로봇2는 도메인 17
+export ROS_DOMAIN_ID=15 ROS_STATIC_PEERS=192.168.0.<PC>
+ros2 launch pinky_bringup bringup_robot.launch.xml
+ros2 run pinky_lamp_control main_node        # (선택, 다른 ssh 창) 상태 램프. 없으면 카드에 "램프 응답 없음"
+# ↑ 학원에서 처음 확인할 것: 램프 드라이버(커널 모듈, pinky_lamp_control/README.md)가 설정돼 있는지, 일반 사용자로 켜지는지
+
+# ── 5. PC에서: 연결 확인 → 다른 Nav2가 없는지 → 관제 실행
 source ~/giddongcar/pinky_pro/install/setup.bash
-ROS_DOMAIN_ID=15 ros2 topic echo /scan sensor_msgs/msg/LaserScan --once  # 연결 확인 (17도)
-ros2 launch pinky_fleet multi_robot.launch.py
+ROS_DOMAIN_ID=15 ros2 topic echo /scan sensor_msgs/msg/LaserScan --once --field header.frame_id   # 17도
+ROS_DOMAIN_ID=15 ros2 node list | grep -E "bt_navigator|amcl"   # 비어 있어야 한다(17도). 있으면 다른 PC의 Nav2부터 끈다
+ros2 launch pinky_fleet multi_robot.launch.py   # 터미널에 "· 교통 정리 켬"이 떠야 한다
 ```
 
-브라우저 http://localhost:8080 → 로봇마다 초기 위치 설정 → 목적지 지정. 자세한 사용법은 [pinky_fleet/README.md](../pinky_pro/src/pinky_fleet/README.md).
+- 교통 정리(칸 열쇠)는 기본으로 켜진다. 지도가 good3가 아니면 스스로 꺼지고 카드·상태에 "교통 정리 꺼짐"이 뜬다(그 지도용 칸 파일을 새로 만들어야 한다: `pinky_fleet/params/traffic_good3.yaml`).
+- 끌 때: PC launch 터미널 Ctrl+C → `pinky_stop`(bashrc 함수, 도메인 15/17에 0 속도) → 로봇 bringup Ctrl+C.
+
+브라우저 http://localhost:8080 → 로봇마다 **↗ 초기 위치**(`P`)로 실제 위치를 누른 채 바라보는 방향으로 끌어 찍기 → **⚑ 목적지**(`G`)로 목표 지정. 자세한 사용법은 [대시보드 사용법](../pinky_pro/src/pinky_fleet/README.md#대시보드-사용법).
 
 ## 네트워크 (공유기)
 
@@ -69,7 +86,7 @@ ros2 launch pinky_fleet multi_robot.launch.py
   ```bash
   ROS_DOMAIN_ID=15 ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist "{}"
   ```
-- 대시보드의 "이동 취소"는 Nav2 목표만 취소한다. 비상정지가 아니다.
+- 대시보드의 **■ 이동 취소**는 Nav2 목표만 취소한다. 비상정지가 아니다. Esc는 지도 도구만 끄고 로봇에는 아무것도 보내지 않는다.
 - `pkill -9`로 Nav2를 죽이면 0 속도가 나가지 않아 로봇이 계속 달린다. 정리는 launch 터미널에서 Ctrl+C로 하고, 그래도 썼다면 도메인마다 0 속도를 보낸다.
 - 대시보드는 인증이 없다. `--host 0.0.0.0`으로 열면 같은 WiFi의 누구나 로봇을 움직일 수 있다. 기본값(127.0.0.1)을 유지한다.
 - 시뮬을 돌리는 PC가 로봇 공유기에 붙어 있으면 반드시 격리한다. [docs/sim.md](sim.md)
