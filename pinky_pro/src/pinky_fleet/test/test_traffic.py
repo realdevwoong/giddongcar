@@ -165,10 +165,13 @@ def test_parked_robots_hold_no_keys_but_their_spot_and_goal_are_protected():
 def test_goal_in_or_next_to_a_passage_or_off_the_cells_is_rejected():
     g = gate()
     for target, code in ((dict(x=1.60, y=1.05, yaw=0), 'near_zone'),   # 문 안
-                         (dict(x=2.00, y=0.95, yaw=0), 'near_zone'),   # 문 옆
+                         (dict(x=1.78, y=1.05, yaw=0), 'near_zone'),   # 문 바로 옆(0.10 m 안)
                          (dict(x=2.30, y=0.40, yaw=0), 'near_zone'),   # 칸막이 밑 통로
                          (dict(x=5.00, y=5.00, yaw=0), 'off_map')):
         assert g.check_target('robot1', target, parked())[0] == code
+    # 문에서 조금만 떨어지면 고를 수 있다(예전 0.20 m + 넓은 문 사각형은 문 주변 0.9 m를 통째로 막았다)
+    for x, y in ((2.00, 0.95), (1.30, 1.05), (1.60, 0.70)):
+        assert g.check_target('robot1', dict(x=x, y=y, yaw=0), parked()) is None
 
 
 def test_robot_standing_in_a_passage_blocks_routes_through_it():
