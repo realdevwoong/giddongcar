@@ -23,6 +23,7 @@ from rclpy.time import Time
 
 import pinky_fleet.fleet_dashboard as dashboard
 from pinky_fleet.fleet_dashboard import CommandError, Fleet, Robot, handler_for, pose_input, await_future
+from pinky_fleet.localize import Localizer
 
 
 class FakeRobot:
@@ -83,6 +84,7 @@ class FleetTests(unittest.TestCase):
                 command_lock=threading.Lock(), lock=threading.RLock(), targets={},
                 snapshot=lambda: dict(online=online, pose={'x': 0} if online else None),
                 get_clock=lambda: SimpleNamespace(now=lambda: Time(seconds=1)),
+                localizer=Localizer(known=True), stop_spin=Mock(return_value=False),
                 initial=Mock(get_subscription_count=Mock(return_value=amcl)),
                 navigator=Mock(wait_for_server=Mock(return_value=nav2),
                                send_goal_async=Mock(return_value=answered(SimpleNamespace(accepted=accepted)))),
@@ -121,7 +123,7 @@ class FleetTests(unittest.TestCase):
                                 targets={}, results={}, sent=None, last_odom=time.monotonic(), robot_name='robot1',
                                 domain=25, pose={'x': 0}, map_id='same', path=[],
                                 navigator=SimpleNamespace(server_is_ready=lambda: True),
-                                lamp_state=None, lamp=None, lamp_goal=None, lamp_since=0.0, lamp_sent=0.0,
+                                localizer=Localizer(known=True), lamp_state=None, lamp=None, lamp_goal=None, lamp_since=0.0, lamp_sent=0.0,
                                 lamp_future=None, lamp_client=Mock())
         robot.lamp_client.service_is_ready.return_value = lamp_ready
         robot.lamp_client.call_async.side_effect = lambda request: self.lamp_reply()
@@ -362,9 +364,15 @@ class FleetTests(unittest.TestCase):
 
     def test_dashboard_sim_time_flag_reaches_both_robots(self):
         self.assertEqual(self.run_dashboard('--use-sim-time').call_args_list,
-                         [call('robot1', 15, True), call('robot2', 17, True)])
+                         [call('robot1', 15, True, False, False), call('robot2', 17, True, False, False)])
         self.assertEqual(self.run_dashboard().call_args_list,
-                         [call('robot1', 15, False), call('robot2', 17, False)])
+                         [call('robot1', 15, False, False, False), call('robot2', 17, False, False, False)])
+        self.assertEqual(self.run_dashboard('--auto-spin').call_args_list,
+                         [call('robot1', 15, False, False, True), call('robot2', 17, False, False, True)])
+
+    def test_known_pose_flag_skips_global_localization_for_that_robot(self):
+        self.assertEqual(self.run_dashboard('--known-pose', 'robot2').call_args_list,
+                         [call('robot1', 15, False, False, False), call('robot2', 17, False, True, False)])
 
     def test_robot_node_follows_sim_clock_when_asked(self):
         # 진짜 노드를 하나 만든다(이 PC 안에서만, 안 쓰는 도메인). /clock을 따라가는 ROS 시간이 켜져야 한다.
@@ -538,7 +546,7 @@ REAL, SIM = ('15', '17'), ('25', '27')  # 도메인: 실물, 시뮬
 
 
 class LaunchTests(unittest.TestCase):
-    def start(self, use_sim_time, domains, env=ISOLATED, poses=('', ''), traffic_zones=''):
+    def start(self, use_sim_time, domains, env=ISOLATED, poses=('', ''), traffic_zones='', auto_spin='false'):
         spec = importlib.util.spec_from_file_location('multi_robot_launch', LAUNCH_FILE)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -552,7 +560,7 @@ class LaunchTests(unittest.TestCase):
             map=str(LAUNCH_FILE.parents[1] / 'maps' / 'good3.yaml'), params_file=str(params),
             robot1_domain=domains[0], robot2_domain=domains[1], host='127.0.0.1', port='8080',
             use_sim_time=use_sim_time, robot1_initial_pose=poses[0], robot2_initial_pose=poses[1],
-            traffic_zones=traffic_zones)
+            traffic_zones=traffic_zones, auto_spin=auto_spin)
         with patch.dict(os.environ, env):
             actions = module.start(context)
         self.actions = actions  # 살려 둬야 임시 params 파일이 지워지지 않는다
@@ -610,6 +618,19 @@ class LaunchTests(unittest.TestCase):
     def test_rejects_unknown_use_sim_time(self):
         with self.assertRaises(RuntimeError):
             self.start('yes', SIM)
+
+    def test_auto_spin_reaches_the_dashboard(self):
+        cmds, _ = self.start('false', REAL, env={}, auto_spin='true')
+        self.assertIn('--auto-spin', cmds[2])
+        self.assertIn("DeclareLaunchArgument('auto_spin', default_value='true'", LAUNCH_FILE.read_text())  # 기본은 켬
+        with self.assertRaises(RuntimeError):
+            self.start('false', REAL, env={}, auto_spin='yes')
+
+    def test_robots_with_known_pose_skip_global_localization(self):
+        cmds, _ = self.start('true', SIM, poses=('', '2.0,0.5,0'))
+        self.assertIn('--known-pose', cmds[2])
+        self.assertEqual(cmds[2][cmds[2].index('--known-pose') + 1], 'robot2')
+        self.assertEqual(cmds[2].count('--known-pose'), 1)
 
     def test_real_mode_shares_one_params_waiting_for_pose(self):
         cmds, _ = self.start('false', REAL, env={})

@@ -362,6 +362,9 @@ dialog dt { font-weight: 700; }
   <h3>용어</h3>
   <dl>
     <dt>초기 위치</dt><dd>RViz의 2D Pose Estimate와 같아요. AMCL에 /initialpose로 “로봇이 지금 여기 있어요”를 알려요.</dd>
+    <dt>위치 찾기</dt><dd>관제를 켜면 AMCL 전역 위치 찾기로 지도 전체에서 스스로 위치를 찾아요. 기본(auto_spin:=true)은 켜자마자 제자리에서 한 바퀴 돌고 0 속도로 멈춰요. auto_spin:=false면 가만히 라이다로만 찾아요. 확인되기 전에는 지도에 그리지 않아요.
+      못 찾으면 <b>⟳ 돌면서 찾기</b> — 로봇 주변을 보고 누르면 제자리에서 천천히 한 바퀴 돌고 0 속도로 멈춰요(■ 이동 취소로도 멈춤).
+      확인된 위치가 틀렸으면 초기 위치를 찍어 고쳐요.</dd>
     <dt>목적지</dt><dd>RViz의 Nav2 Goal과 같아요. navigate_to_pose 목표를 보내요.</dd>
     <dt>복구</dt><dd>막혔을 때 Nav2가 스스로 하는 후진·제자리 회전·기다리기.</dd>
     <dt>이동 취소</dt><dd>Nav2 목표 취소예요. 비상 정지가 아니에요. pinky_bringup은 마지막 cmd_vel을 계속 따르니,
@@ -397,6 +400,8 @@ dialog dt { font-weight: 700; }
       <span class="tag seltag" data-el="selTag">선택됨</span>
       <span class="c-actions">
         <button type="button" class="btn sm" data-el="resend" hidden><span>↻ 다시 보내기<span class="resend-xy num" data-el="resendXY"></span></span></button>
+        <button type="button" class="btn sm fill" data-el="spin" hidden
+          title="로봇 주변이 비어 있는지 보고 누르세요. 제자리에서 천천히 한 바퀴 돌며 위치를 찾아요. 멈추려면 ■ 이동 취소">⟳ 돌면서 찾기</button>
         <button type="button" class="btn sm fill" data-el="setpose" hidden>↗ 초기 위치 찍기</button>
         <button type="button" class="btn sm cancel" data-el="cancel" aria-keyshortcuts="X"><span>■ 이동 취소</span></button>
       </span>
@@ -440,7 +445,7 @@ const DARK = '#0e141d', RED = '#d92d43', TAU = Math.PI * 2;
 const FONT = "system-ui, 'Noto Sans KR', 'Noto Sans CJK KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif";
 const CLOCK_SKEW_S = 0.5;   // 로봇 시계 차이가 이보다 크면 경고(초)
 const ACTIVE = ['accepted', 'executing', 'canceling'];
-const ACTION_KO = {initialpose: '초기 위치', goal: '목적지', stop: '이동 취소'};
+const ACTION_KO = {initialpose: '초기 위치', goal: '목적지', stop: '이동 취소', spin: '돌면서 찾기'};
 const TOOL_TITLE = {initialpose: 'RViz의 2D Pose Estimate와 같아요 · P', goal: 'RViz의 Nav2 Goal과 같아요 · G'};
 const WARN = '⚠\uFE0E', PLAY = '▶\uFE0E';   // \uFE0E: 컬러 이모지로 바뀌지 않게
 // 상태 글자는 여기 한 곳에서만 정한다 (카드·도구줄·지도 라벨·기록이 같이 쓴다)
@@ -453,6 +458,13 @@ const NAV = {
   canceled:  {ko: '취소됨',    en: 'CANCELED',  glyph: '■',  tone: 'greyfill', short: '취소됨'},
   aborted:   {ko: '이동 실패', en: 'ABORTED',   glyph: WARN, tone: 'red',      short: '실패'},
 };
+// 전역 위치 찾기 단계 (/api/state robots[].localize.phase). found·manual·known은 위치가 있으니 NAV 상태로 보인다
+const LOC = {
+  waiting:   {ko: '위치 찾기 준비', en: 'LOCALIZING',    glyph: '…', tone: 'grey',    short: '준비'},
+  searching: {ko: '위치 찾는 중',   en: 'LOCALIZING',    glyph: '◌', tone: 'blue-o',  short: '찾는 중'},
+  spinning:  {ko: '돌면서 찾는 중', en: 'SPINNING',      glyph: '⟳', tone: 'blue',    short: '회전 중'},
+  unsure:    {ko: '위치 못 찾음',   en: 'NOT LOCALIZED', glyph: '?', tone: 'amber-o', short: '못 찾음'},
+};
 const TONE_TEXT = {grey: 'st-grey', dash: 'st-grey', greyfill: 'st-grey', 'blue-o': 'st-blue', blue: 'st-blue',
   green: 'st-green', red: 'st-red', 'amber-o': 'st-amber'};
 // 실패했을 때 '해 볼 것'. 백엔드가 보낸 번호·코드로만 고른다 (오류 글자를 거꾸로 읽지 않는다. 없으면 안 붙인다)
@@ -462,7 +474,8 @@ const TRY_CODE = {104: '막은 것(다른 로봇?)을 치우고 다시', 105: '�
   208: '갈 길이 없어요 — 좁은 문이 막혔거나 벽에 너무 붙음', 102: '로봇 연결·TF 확인 후 위치 다시', 202: '로봇 연결·TF 확인 후 위치 다시'};
 // 요청 실패 코드 (POST 오류 응답의 code)
 const TRY_REQ = {amcl_not_ready: '10초 뒤 다시', no_pose: '↗ 초기 위치를 먼저', nav2_not_ready: '잠시 뒤 다시 (Nav2가 켜지는 중)',
-  goal_rejected: '벽 위나 지도 밖 — 바닥 안쪽을 고르세요', map_mismatch: '두 로봇을 같은 map 파일로 띄웠는지 확인'};
+  goal_rejected: '벽 위나 지도 밖 — 바닥 안쪽을 고르세요', map_mismatch: '두 로봇을 같은 map 파일로 띄웠는지 확인',
+  nav_active: '■ 이동 취소 뒤 다시', offline: '로봇 연결부터 확인'};
 // 도구가 막힌 이유
 const WHY = {server: '서버 연결 끊김', map: '지도 수신 대기', mismatch: '지도 불일치 — 두 로봇이 같은 map 파일인지 확인',
   offline: '로봇 연결 끊김', pose: '먼저 초기 위치를 찍으세요 (P)', nav: 'Nav2 준비 안 됨', busy: '앞 요청 처리 중…'};
@@ -544,7 +557,7 @@ for (const id of IDS) {
   el.chipName.textContent = el.cardName.textContent = id;
   el.chip.setAttribute('aria-keyshortcuts', NUM[id]);
   el.cancel.setAttribute('aria-label', `${id} 이동 취소 — Nav2 목표만, 비상 정지 아님`);
-  el.cancel.title = '이 로봇의 Nav2 목표를 취소합니다 (X = 선택한 로봇). 비상 정지가 아니에요.';
+  el.cancel.title = '이 로봇의 Nav2 목표를 취소합니다 (X = 선택한 로봇). 돌면서 찾는 중이면 회전도 멈춰요. 비상 정지가 아니에요.';
   $('#tools').insertBefore(group, $('.tools-end'));
   if (id === 'robot1') {
     const sep = document.createElement('span'); sep.className = 'tsep'; sep.setAttribute('aria-hidden', 'true');
@@ -558,6 +571,7 @@ for (const id of IDS) {
   el.cancel.onclick = () => send(id, 'stop');
   el.resend.onclick = () => resend(id);
   el.setpose.onclick = () => armSetup(id);
+  el.spin.onclick = () => spin(id);
   el.ack.onclick = () => ackRobot(id);
   el.lampFail.onclick = () => openHelp('#helpLamp');
   ui[id] = el;
@@ -584,6 +598,18 @@ function view(id) {
     detail: '이 로봇의 /map을 아직 못 받았어요 — map_server 확인', pos: ''};
   if (!r.map_matches) return {key: 'mismatch', ko: '지도 불일치', en: 'MAP MISMATCH', glyph: '≠', tone: 'amber-o', short: '불일치',
     detail: '공통 지도와 달라요 — 두 로봇을 같은 map 파일로 띄웠는지 확인', pos: ''};
+  // 전역 위치 찾기 중: 백엔드가 확인될 때까지 pose를 보내지 않는다(엉뚱한 자리를 그리지 않게)
+  const L = r.localize;
+  if (!r.pose && L && LOC[L.phase]) {
+    const err = L.spread ? ` · 오차 ±${L.spread[0].toFixed(2)} m, ±${deg(L.spread[1])}°` : '';
+    const detail = {
+      waiting: 'AMCL이 켜지면 스스로 위치를 찾아요 (auto_spin이면 제자리에서 한 바퀴 돌아요)',
+      searching: `라이다로 지도와 맞춰 보는 중 (가만히) · ${L.quiet[0]}/${L.quiet[1]}${err}`,
+      spinning: `제자리에서 천천히 한 바퀴 · ${Math.round((L.turned || 0) * 100)}%${err} — 멈추려면 ■ 이동 취소`,
+      unsure: `확신이 없어요${err} — 로봇 주변이 비었는지 보고 ⟳ 돌면서 찾기, 또는 ↗ 초기 위치를 직접 찍으세요`,
+    }[L.phase];
+    return {key: 'loc-' + L.phase, ...LOC[L.phase], detail, pos: ''};
+  }
   // 위치가 없으면 Nav2도 준비되지 않는다(costmap이 map→base_link TF를 기다림) → 따로 알리지 않고 한 문장으로
   if (!r.pose) return {key: 'nopose', ko: '초기 위치 필요', en: 'NO POSE', glyph: '?', tone: 'amber-o', short: '위치 필요',
     detail: r.nav_ready === false ? '초기 위치 / TF 대기 — 지도에서 위치를 찍으세요. 찍으면 Nav2가 준비돼요'
@@ -1319,11 +1345,11 @@ function failText(action, err) {
 async function send(id, action, pose) {
   // 한 로봇에 위치·목적지 요청은 한 번에 하나만 (이동 취소는 언제든 보낸다)
   if (action !== 'stop' && pending[id]) { showTemp(id, `${ACTION_KO[action]} — ${WHY.busy}`); render(); return; }
-  const body = action === 'stop' ? {} : {x: pose.x, y: pose.y, yaw: pose.yaw};
+  const body = pose ? {x: pose.x, y: pose.y, yaw: pose.yaw} : {};
   const token = action === 'stop' ? null : {action, target: body};   // 끝날 때 내 요청일 때만 비운다
   if (token) pending[id] = token;
   else stopPending[id]++;
-  log(id, '→', action === 'stop' ? '이동 취소 보냄' : `${ACTION_KO[action]} 보냄 (${xy(body)})`, 'info');
+  log(id, '→', pose ? `${ACTION_KO[action]} 보냄 (${xy(body)})` : `${ACTION_KO[action]} 보냄`, 'info');
   render(); draw();
   let result;
   try {
@@ -1349,6 +1375,12 @@ function resend(id) {
   const why = toolBlock(id, 'goal');
   if (why) { showTemp(id, `다시 보내기 — ${why}`); render(); return; }
   send(id, 'goal', r.nav.target);
+}
+// 실물 로봇이 스스로 움직이는 유일한 버튼: 한 번 더 묻는다
+function spin(id) {
+  if (pending[id]) { showTemp(id, `${ACTION_KO.spin} — ${WHY.busy}`); render(); return; }
+  if (!confirm(`${id}: 로봇 주변이 비어 있나요?\n제자리에서 천천히 한 바퀴 돌며 위치를 찾아요. 멈추려면 ■ 이동 취소.`)) return;
+  send(id, 'spin');
 }
 function ackRobot(id) { openIssues.filter(i => i.robot === id).forEach(i => acks.add(i.key)); render(); }
 
@@ -1384,6 +1416,15 @@ function updateTracks() {
         t.episode++;
         log(r.id, WARN, ACTIVE.includes(t.navBeforeDrop) ? '연결 끊김 — 이동 중이었어요' : '연결 끊김', 'crit');
       }
+    }
+    // 전역 위치 찾기 결과를 한 줄씩 (처음 받은 단계는 기록하지 않는다)
+    const phase = r.localize && r.localize.phase, prevPhase = t.locPhase;
+    t.locPhase = phase;
+    if (prevPhase !== undefined && prevPhase !== phase) {
+      const sp = r.localize.spread, err = sp ? ` (오차 ±${sp[0].toFixed(2)} m, ±${deg(sp[1])}°)` : '';
+      if (phase === 'found') log(r.id, '✓', `위치 확인됨${err} — 지도에서 맞는지 보세요. 틀리면 ↗ 초기 위치`, 'ok');
+      else if (phase === 'unsure') log(r.id, '?', `위치 못 찾음${err} — ⟳ 돌면서 찾기 또는 ↗ 초기 위치`, 'warn');
+      else if (phase === 'searching') log(r.id, '◌', '위치 찾기 시작 (가만히)', 'info');
     }
     const n = r.nav;
     // 목표 상태가 바뀔 때마다 한 줄 (처음 받은 상태와 '대기'는 기록하지 않는다)
@@ -1504,8 +1545,11 @@ function renderCard(id) {
     setAttr(el.resend, 'aria-disabled', why ? 'true' : null);
     setAttr(el.resend, 'title', why ? `지금은 못 보내요: ${why}` : `같은 목적지 (${xy(n.target)}, ${deg(n.target.yaw)}°)로 다시 보냅니다`);
   }
-  show(el.setpose, v.key === 'nopose');
-  card.classList.toggle('crowded', canResend || v.key === 'nopose');
+  const canSpin = v.key === 'loc-searching' || v.key === 'loc-unsure';
+  show(el.spin, canSpin);
+  if (canSpin) setAttr(el.spin, 'aria-disabled', pending[id] ? 'true' : null);
+  show(el.setpose, v.key === 'nopose' || canSpin);
+  card.classList.toggle('crowded', canResend || v.key === 'nopose' || canSpin);
   // 상태 띠: 기호 + 한국어 + 영어 대문자 (색만으로 알리지 않는다). 서버가 끊기면 '마지막 수신 시각'을 글자로 붙인다
   setClass(el.band, 'band t-' + v.tone);
   setText(el.glyph, v.glyph); setText(el.ko, v.ko); setText(el.en, v.en);
@@ -1546,9 +1590,10 @@ function renderCard(id) {
   }
 }
 
-function setupRobot() {   // 연결됐고 공통 지도도 있는데 위치를 모르는 로봇
+function setupRobot() {   // 연결됐고 공통 지도도 있는데 위치를 모르는 로봇 (스스로 찾는 중이면 재촉하지 않는다)
   if (!serverOk()) return null;
-  return IDS.find(id => { const r = robot(id); return r && r.online && r.map_id && r.map_matches && !r.pose; }) || null;
+  const busy = r => r.localize && ['waiting', 'searching', 'spinning'].includes(r.localize.phase);
+  return IDS.find(id => { const r = robot(id); return r && r.online && r.map_id && r.map_matches && !r.pose && !busy(r); }) || null;
 }
 function renderHint() {
   const temp = tempHint && Date.now() < tempHint.until ? tempHint : null;

@@ -43,7 +43,7 @@ ros2 launch pinky_fleet multi_robot.launch.py   # 터미널에 "· 교통 정리
 - 교통 정리(칸 열쇠)는 기본으로 켜진다. 지도가 good3가 아니면 스스로 꺼지고 카드·상태에 "교통 정리 꺼짐"이 뜬다(그 지도용 칸 파일을 새로 만들어야 한다: `pinky_fleet/params/traffic_good3.yaml`).
 - 끌 때: PC launch 터미널 Ctrl+C → `pinky_stop`(bashrc 함수, 도메인 15/17에 0 속도) → 로봇 bringup Ctrl+C.
 
-브라우저 http://localhost:8080 → 로봇마다 **↗ 초기 위치**(`P`)로 실제 위치를 누른 채 바라보는 방향으로 끌어 찍기 → **⚑ 목적지**(`G`)로 목표 지정. 자세한 사용법은 [대시보드 사용법](../pinky_pro/src/pinky_fleet/README.md#대시보드-사용법).
+브라우저 http://localhost:8080 → 로봇마다 AMCL이 켜지면 **제자리에서 한 바퀴 돌며** 스스로 위치를 찾는다(AMCL 전역 위치 찾기, 끝나면 0 속도). ⚠️ 관제를 켜기 전에 로봇 주변을 비운다. 돌지 않게 하려면 `auto_spin:=false`(가만히 찾음). 확인되면 지도에 로봇이 나타난다. "위치 못 찾음"이면 로봇 주변을 보고 **⟳ 돌면서 찾기**(제자리 한 바퀴, ■ 이동 취소로 멈춤) 또는 **↗ 초기 위치**(`P`)로 직접 찍기. 나타난 위치가 틀렸어도 `P`로 고친다 → **⚑ 목적지**(`G`)로 목표 지정. 자세한 사용법은 [대시보드 사용법](../pinky_pro/src/pinky_fleet/README.md#대시보드-사용법).
 
 ## 네트워크 (공유기)
 

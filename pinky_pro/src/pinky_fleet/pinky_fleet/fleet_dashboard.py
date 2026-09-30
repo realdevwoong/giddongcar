@@ -19,12 +19,16 @@ from rclpy.action import ActionClient
 from rclpy.time import Time
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy, qos_profile_sensor_data
 from nav_msgs.msg import OccupancyGrid, Path as NavPath, Odometry
-from geometry_msgs.msg import PoseWithCovarianceStamped
+from geometry_msgs.msg import PoseWithCovarianceStamped, Twist, Vector3
 from nav2_msgs.action import NavigateToPose
 from pinky_interfaces.srv import SetLamp
+from pinky_fleet.localize import Localizer, SPIN_SPEED
 from pinky_fleet.traffic import TrafficGate, load_zones, map_mismatch
 from action_msgs.msg import GoalStatus, GoalStatusArray
 from action_msgs.srv import CancelGoal
+from lifecycle_msgs.msg import State
+from lifecycle_msgs.srv import GetState
+from std_srvs.srv import Empty
 from tf2_ros import Buffer, TransformListener
 from ament_index_python.packages import get_package_share_directory
 
@@ -59,6 +63,7 @@ LAMP = {'idle': (3, (1.0, 1.0, 1.0), 1000, '흰색 숨쉬기'),
         'aborted': (2, (1.0, 0.0, 0.0), 250, '빨강 빠른 깜빡임')}
 LAMP_HOLD = 5.0     # 도착·취소 색을 보여 주는 시간(초). 그다음 대기로. 실패 빨강은 다음 목표까지 둔다(경보)
 LAMP_TIMEOUT = 3.0  # 램프 서비스가 이 시간(초) 안에 답이 없으면 실패로 보고 다시 보낸다
+LOC_TIMEOUT = 5.0   # AMCL 서비스(상태 확인·전역 찾기·가만히 확인)가 이 시간(초) 안에 답이 없으면 버리고 다시 한다
 
 
 class CommandError(ValueError):
@@ -100,7 +105,7 @@ def await_future(future, timeout=4):
 
 
 class Robot(Node):
-    def __init__(self, name, domain, use_sim_time=False):
+    def __init__(self, name, domain, use_sim_time=False, known_pose=False, auto_spin=False):
         self.ros_context = Context()
         rclpy.init(context=self.ros_context, domain_id=domain)
         # 시뮬 시간이면 now()가 /clock을 따라가서 Gazebo TF 스탬프가 2초 신선도 검사를 통과한다.
@@ -122,6 +127,13 @@ class Robot(Node):
         # 램프를 바꾼 (목표, 상태), 그 상태로 바꾼 시각, 마지막 요청을 보낸 시각
         self.lamp_goal, self.lamp_since, self.lamp_sent = None, 0.0, 0.0
         self.lamp_future = None   # 아직 답을 기다리는 램프 요청
+        # 전역 위치 찾기. launch가 초기 위치를 알려 준 로봇(시뮬)은 끈다
+        self.localizer = Localizer(known=known_pose)
+        self.auto_spin = auto_spin   # 전역 찾기를 시작하자마자 제자리에서 한 바퀴 돈다(사람 확인 없이)
+        self.odom_yaw = None
+        self.amcl_active = False  # AMCL lifecycle이 active인 걸 봤다
+        self.loc_future, self.loc_sent = None, 0.0   # 아직 답을 기다리는 AMCL 요청 (future, client), 보낸 시각
+        self.driving = False      # 제자리 회전 속도를 보내는 중
         self.buffer = Buffer(node=self)
         self.listener = TransformListener(self.buffer, self)
         transient = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -136,8 +148,15 @@ class Robot(Node):
         self.navigator = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self.cancel = self.create_client(CancelGoal, 'navigate_to_pose/_action/cancel_goal')
         self.lamp_client = self.create_client(SetLamp, 'set_lamp')
+        self.create_subscription(PoseWithCovarianceStamped, 'amcl_pose', self.on_amcl_pose, transient)
+        self.amcl_state = self.create_client(GetState, 'amcl/get_state')
+        self.global_loc = self.create_client(Empty, 'reinitialize_global_localization')
+        self.nomotion = self.create_client(Empty, 'request_nomotion_update')
+        self.cmd_vel = self.create_publisher(Twist, 'cmd_vel', 10)
         self.create_timer(0.1, self.update_pose)
+        self.create_timer(0.1, self.spin_tick)
         self.create_timer(1.0, self.check_lamp)
+        self.create_timer(1.0, self.localize_tick)
         self.ros_executor = SingleThreadedExecutor(context=self.ros_context)
         self.ros_executor.add_node(self)
         self.thread = threading.Thread(target=self.spin, daemon=True)
@@ -173,6 +192,7 @@ class Robot(Node):
         with self.lock:
             self.last_odom = time.monotonic()
             self.clock_skew = skew
+            self.odom_yaw = yaw(msg.pose.pose.orientation)   # 제자리 회전량을 잰다
 
     def on_status(self, msg):
         seen = (None, 0)  # 목표가 하나도 없으면 대기
@@ -256,6 +276,84 @@ class Robot(Node):
         with self.lock:
             remember(self.results, goal_id, dict(code=code, reason=reason))
 
+    def on_amcl_pose(self, msg):
+        with self.lock:
+            self.localizer.on_pose(msg.pose.covariance)
+        # 돌던 중 확인됐으면 spin_tick이 다음 0.1초에 0 속도를 보낸다
+
+    def localize_tick(self):
+        """1초마다: AMCL이 켜지면 전역 찾기를 시작한다. auto_spin이면 바로 한 바퀴 돌고,
+        아니면 가만히 확인을 보낸다. 답을 기다리지 않는다."""
+        now = time.monotonic()
+        with self.lock:
+            phase, has_map = self.localizer.phase, self.map_data is not None
+            online = now - self.last_odom < 2   # 돌려면 odom으로 회전량을 재야 한다
+            future, client = self.loc_future or (None, None)
+        if future is not None and not future.done():
+            if now - self.loc_sent < LOC_TIMEOUT:
+                return
+            client.remove_pending_request(future)   # 답이 끝내 안 왔다. 버리고 다시 한다
+        if phase == 'waiting' and has_map and not self.amcl_active:
+            # AMCL이 active가 되기 전에 전역 찾기를 부르면 지도 없이 후보를 뿌린다. 상태부터 본다
+            if self.amcl_state.service_is_ready():
+                self.call_amcl(self.amcl_state, GetState.Request(), self.on_amcl_state)
+        elif phase == 'waiting' and has_map:
+            with self.lock:
+                start = self.localizer.amcl_ready(now)
+            if start and self.global_loc.service_is_ready() and (online or not self.auto_spin):
+                self.call_amcl(self.global_loc, Empty.Request(), self.on_global_started)
+        elif phase == 'searching' and self.nomotion.service_is_ready():
+            with self.lock:
+                again = self.localizer.quiet_tick()
+            if again:
+                self.call_amcl(self.nomotion, Empty.Request())
+
+    def call_amcl(self, client, request, on_done=None):
+        future = client.call_async(request)
+        with self.lock:
+            self.loc_future, self.loc_sent = (future, client), time.monotonic()
+
+        def done(f):
+            if f.exception() is None and on_done:
+                with self.lock:
+                    on_done(f.result())
+        future.add_done_callback(done)
+
+    def on_global_started(self, _):
+        # 잠금 안에서 불린다(call_amcl). 회전 속도는 spin_tick이 0.1초 안에 보내기 시작한다
+        if self.auto_spin:
+            self.localizer.spin_start(time.monotonic(), self.odom_yaw)
+        else:
+            self.localizer.started()
+
+    def on_amcl_state(self, response):
+        self.amcl_active = response.current_state.id == State.PRIMARY_STATE_ACTIVE
+
+    def spin_tick(self):
+        """0.1초마다: 돌면서 찾는 중이면 회전 속도를, 방금 끝났으면 0 속도를 보낸다.
+        pinky_bringup은 cmd_vel이 끊겨도 마지막 속도로 계속 달리므로 끝날 때 반드시 0을 보낸다."""
+        with self.lock:
+            turning = self.localizer.spin_update(time.monotonic(), self.odom_yaw)
+            was, self.driving = self.driving, turning
+            # 잠금 안에서 보낸다: stop_spin이 0을 보낸 뒤에 회전 속도가 끼어들지 않게
+            if turning:
+                self.cmd_vel.publish(Twist(angular=Vector3(z=SPIN_SPEED)))
+            elif was:
+                self.send_zero()
+
+    def stop_spin(self):
+        """사람이 멈추거나 초기 위치를 찍거나 관제를 끌 때. 돌던 중이었으면 True."""
+        with self.lock:
+            spun = self.localizer.spin_abort()
+            if spun or self.driving:
+                self.driving = False
+                self.send_zero()
+        return spun
+
+    def send_zero(self):
+        for _ in range(3):   # Wi-Fi에서 하나가 늦어도 멈추게
+            self.cmd_vel.publish(Twist())
+
     def update_pose(self):
         """map → base_link 위치. 신선도는 로봇이 찍은 시각이 아니라 이 PC가 '새 값을 받은 시각'으로 본다.
         로봇 시계가 PC와 달라도(인터넷 없는 공유기) 그려진다. 2초 동안 새 값이 없으면 숨긴다."""
@@ -286,8 +384,11 @@ class Robot(Node):
                        target=self.targets.get(goal_id), feedback=self.goal['feedback'],
                        error=result.get('reason') if state == 'aborted' else None,
                        error_code=result.get('code'))
+            # 전역 찾기 중에는 AMCL이 아직 엉뚱한 곳을 가리킬 수 있어 그리지 않는다(목적지도 못 보낸다)
+            shown = online and self.localizer.shows_pose
             return dict(id=self.robot_name, domain=self.domain, online=online,
-                        pose=self.pose if online else None, map_id=self.map_id,
+                        pose=self.pose if shown else None, map_id=self.map_id,
+                        localize=self.localizer.snapshot(),
                         path=self.path if online else [], status=label, nav=nav, lamp=self.lamp,
                         clock_skew=round(getattr(self, 'clock_skew', 0.0), 2) if online else None,
                         nav_ready=self.navigator.server_is_ready())
@@ -296,12 +397,20 @@ class Robot(Node):
         # Serialize HTTP requests per robot; the ROS executor remains independent.
         with self.command_lock:
             if action == 'stop':
-                if not self.cancel.wait_for_service(timeout_sec=1):
-                    raise CommandError('Nav2 취소 서비스가 준비되지 않았습니다.', 'cancel_unavailable')
-                response = await_future(self.cancel.call_async(CancelGoal.Request()))
-                if response.return_code != CancelGoal.Response.ERROR_NONE:
-                    raise CommandError('Nav2가 취소 요청을 수락하지 않았습니다.', 'cancel_rejected')
-                return '이동 취소 요청 수락'
+                spun = self.stop_spin()
+                try:
+                    if not self.cancel.wait_for_service(timeout_sec=1):
+                        raise CommandError('Nav2 취소 서비스가 준비되지 않았습니다.', 'cancel_unavailable')
+                    response = await_future(self.cancel.call_async(CancelGoal.Request()))
+                    if response.return_code != CancelGoal.Response.ERROR_NONE:
+                        raise CommandError('Nav2가 취소 요청을 수락하지 않았습니다.', 'cancel_rejected')
+                except CommandError:
+                    if spun:   # 돌던 것만 멈췄다(Nav2 목표는 없었다)
+                        return '제자리 회전 멈춤 — 0 속도 보냄'
+                    raise
+                return '이동 취소 요청 수락' + (' · 제자리 회전 멈춤' if spun else '')
+            if action == 'spin':
+                return self.start_spin()
             x, y, heading = pose_input(body)
             if action == 'initialpose':
                 if self.initial.get_subscription_count() == 0:
@@ -314,7 +423,10 @@ class Robot(Node):
                 msg.pose.pose.orientation.w = math.cos(heading / 2)
                 msg.pose.covariance[0] = msg.pose.covariance[7] = 0.25
                 msg.pose.covariance[35] = 0.06854
+                self.stop_spin()
                 self.initial.publish(msg)
+                with self.lock:
+                    self.localizer.manual()   # 사람이 찍은 위치를 믿는다. 전역 찾기는 그만둔다
                 return '초기 위치 전송 완료 — 지도에서 위치를 확인하세요.'
             state = self.snapshot()
             if not state['online'] or state['pose'] is None:
@@ -337,7 +449,31 @@ class Robot(Node):
             handle.get_result_async().add_done_callback(lambda future: self.on_result(goal_id, future))
             return '목적지 수락 — 이동 상태를 확인하세요.'
 
+    def start_spin(self):
+        """전역 찾기를 새로 뿌리고 제자리에서 한 바퀴 돈다. 사람이 로봇 주변을 보고 누르는 버튼에서만 부른다."""
+        state = self.snapshot()
+        if not state['online']:
+            raise CommandError('로봇 연결이 끊겨 있어요.', 'offline')
+        if state['nav']['active']:
+            raise CommandError('이동 중에는 돌 수 없어요. ■ 이동 취소 뒤 다시 누르세요.', 'nav_active')
+        with self.lock:
+            phase = self.localizer.phase
+        if phase == 'spinning':
+            return '이미 돌면서 찾는 중이에요.'
+        if phase == 'waiting' or not self.global_loc.wait_for_service(timeout_sec=1):
+            raise CommandError('AMCL이 아직 준비되지 않았습니다.', 'amcl_not_ready')
+        # 앞에서 한 곳으로 잘못 모였을 수 있어 후보를 지도 전체에 다시 뿌린 뒤 돈다
+        await_future(self.global_loc.call_async(Empty.Request()))
+        with self.lock:
+            self.localizer.spin_start(time.monotonic(), self.odom_yaw)
+        return '돌면서 위치 찾기 시작 — 한 바퀴 돌아요. 멈추려면 ■ 이동 취소'
+
     def close(self):
+        # 돌던 중에 관제를 꺼도 로봇이 계속 돌지 않게 0 속도부터 보낸다
+        try:
+            self.stop_spin()
+        except Exception:
+            pass
         # launch는 SIGINT 후 5초면 SIGTERM으로 올리므로 로봇 2대 합쳐 그 안에 끝나야 한다.
         self.ros_executor.shutdown(timeout_sec=1)
         self.thread.join(timeout=1)
@@ -377,7 +513,7 @@ class Fleet:
         return dict(enabled=self.traffic_off is None, off=self.traffic_off, note=self.traffic_note, **snap)
 
     def command(self, robot_id, action, body):
-        if robot_id not in self.robots or action not in ('goal', 'initialpose', 'stop'):
+        if robot_id not in self.robots or action not in ('goal', 'initialpose', 'stop', 'spin'):
             raise CommandError('Unknown robot or action', 'unknown_route')
         robot = self.robots[robot_id]
         if action != 'stop':
@@ -541,6 +677,10 @@ def main():
     parser.add_argument('--port', type=int, default=8080)
     parser.add_argument('--use-sim-time', action='store_true', help='Gazebo: /clock 시간을 쓴다')
     parser.add_argument('--traffic-zones', default='', help='교통 정리 구역 YAML. 비우면 교통 정리를 끈다')
+    parser.add_argument('--known-pose', action='append', default=[], choices=('robot1', 'robot2'),
+                        help='launch가 초기 위치를 알려 준 로봇. 이 로봇은 전역 위치 찾기를 하지 않는다')
+    parser.add_argument('--auto-spin', action='store_true',
+                        help='전역 위치 찾기를 시작하자마자 제자리에서 한 바퀴 돈다(실물이 사람 확인 없이 움직인다)')
     args = parser.parse_args()
     zones = load_zones(args.traffic_zones) if args.traffic_zones else None
     # nohup이나 스크립트 백그라운드로 띄우면 SIGINT 무시가 상속돼 Ctrl+C로 안 꺼진다. 항상 KeyboardInterrupt를 받게 한다.
@@ -549,7 +689,8 @@ def main():
     server = fleet = None
     try:
         for i, domain in enumerate((args.robot1_domain, args.robot2_domain), 1):
-            robots[f'robot{i}'] = Robot(f'robot{i}', domain, args.use_sim_time)
+            name = f'robot{i}'
+            robots[name] = Robot(name, domain, args.use_sim_time, name in args.known_pose, args.auto_spin)
         fleet = Fleet(robots, zones)
         if fleet.gate:
             threading.Thread(target=fleet.run_traffic, daemon=True).start()

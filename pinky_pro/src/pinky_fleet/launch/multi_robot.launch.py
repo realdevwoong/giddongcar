@@ -43,6 +43,10 @@ def start(context):
     if sim not in ('true', 'false'):
         raise RuntimeError('use_sim_time은 true 또는 false여야 합니다')
     sim = sim == 'true'
+    auto_spin = value('auto_spin').lower()
+    if auto_spin not in ('true', 'false'):
+        raise RuntimeError('auto_spin은 true 또는 false여야 합니다')
+    auto_spin = auto_spin == 'true'
     # 시뮬 Nav2가 실물 로봇에 cmd_vel을 보내는 사고를 막는다. 실물 도메인이거나 실물용 DDS 설정이 남아 있으면 시작하지 않는다.
     if sim and set(domains) & set(REAL_DOMAINS):
         raise RuntimeError(f'Gazebo 모드에서는 실물 로봇 도메인 {REAL_DOMAINS[0]}/{REAL_DOMAINS[1]}을 쓸 수 없습니다: '
@@ -91,6 +95,9 @@ def start(context):
              '--robot1-domain', str(domains[0]), '--robot2-domain', str(domains[1]),
              '--host', value('host'), '--port', value('port')]
             + (['--use-sim-time'] if sim else [])
+            # 위치를 알려 준 로봇은 전역 위치 찾기를 하지 않는다. 나머지는 대시보드가 켜지자마자 스스로 찾는다
+            + [arg for i, pose in enumerate(poses, 1) if pose for arg in ('--known-pose', f'robot{i}')]
+            + (['--auto-spin'] if auto_spin else [])
             + (['--traffic-zones', value('traffic_zones')] if value('traffic_zones') else []), output='screen'))
     handlers = [RegisterEventHandler(OnProcessExit(
         target_action=p, on_exit=[EmitEvent(event=Shutdown(reason='A fleet process exited'))]))
@@ -117,8 +124,11 @@ def generate_launch_description():
         DeclareLaunchArgument('use_sim_time', default_value='false',
                               description='true: Gazebo /clock 시간으로 Nav2와 대시보드를 돌린다'),
         DeclareLaunchArgument('robot1_initial_pose', default_value='',
-                              description='"x,y,yaw" (map 좌표). 비우면 대시보드에서 초기 위치를 찍을 때까지 기다린다'),
+                              description='"x,y,yaw" (map 좌표). 비우면 대시보드가 전역 위치 찾기로 스스로 찾는다(틀리면 초기 위치를 찍는다)'),
         DeclareLaunchArgument('robot2_initial_pose', default_value=''),
+        DeclareLaunchArgument('auto_spin', default_value='true',
+                              description='true: 위치를 모르는 로봇은 AMCL이 켜지자마자 제자리에서 한 바퀴 돌며 위치를 찾는다'
+                                          '(실물이 사람 확인 없이 움직인다. 끝나면 0 속도). false: 가만히 찾고 ⟳ 버튼으로만 돈다'),
         DeclareLaunchArgument('traffic_zones', default_value=str(fleet / 'params' / 'traffic_good3.yaml'),
                               description='교통 정리 구역 YAML(좁은 문에 한 대씩). 비우면(traffic_zones:=) 끈다. '
                                           '지도가 구역 파일과 다르면 대시보드가 스스로 끈다'),
