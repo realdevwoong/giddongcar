@@ -104,7 +104,7 @@ class DashboardSpinTests(unittest.TestCase):
 
     def robot(self):
         robot = SimpleNamespace(lock=threading.RLock(), localizer=Localizer(), odom_yaw=0.0, driving=False,
-                                cmd_vel=Mock(), command_lock=threading.Lock())
+                                cmd_vel=Mock(), command_lock=threading.Lock(), backup_handle=None)
         robot.send_zero = lambda: Robot.send_zero(robot)
         robot.stop_spin = lambda: Robot.stop_spin(robot)
         robot.localizer.started()

@@ -138,8 +138,9 @@ class TrafficGate:
         return cells[::-1], vias[::-1]
 
     # ───── 목적지 검사 ─────
-    def check_target(self, robot, target, robots):
-        """고를 수 없는 목적지면 (코드, 이유), 괜찮으면 None."""
+    def check_target(self, robot, target, robots, parked=True):
+        """고를 수 없는 목적지면 (코드, 이유), 괜찮으면 None.
+        parked=False면 다른 로봇이 지금 서 있는 자리는 막지 않는다(곧 떠날 수 있다. 예: 두 로봇 자리 바꾸기)."""
         x, y = target['x'], target['y']
         if self.cell_of(x, y) is None:
             return 'off_map', '목적지가 교통 정리 칸 밖이에요'
@@ -152,7 +153,7 @@ class TrafficGate:
             if other == robot:
                 continue
             spots = []   # 다른 로봇이 앞으로 서 있을 곳: 멈춘 자리, 가고 있는 목적지, 기다리는 목적지
-            if s['pose'] and not s['active']:
+            if parked and s['pose'] and not s['active']:
                 spots.append((s['pose'], '서 있는 자리'))
             if s.get('target') and s['active']:
                 spots.append((s['target'], '목적지'))
@@ -260,3 +261,74 @@ class TrafficGate:
         return dict(owners=dict(self.owner), routes={r: list(c) for r, c in self.routes.items()},
                     pending=[dict(robot=p['robot'], target=p['target'], wait=round(now - p['since'], 1))
                              for p in self.pending])
+
+
+# ───── 달리면서 양보 (YieldRule) ─────
+# 둘 다 바로 출발하고, 달리는 중에 경로가 겹칠 것 같으면 뒤 순위 로봇(robot2)이 양보한다. 앞 순위(robot1)는 늘 그대로 간다.
+# 둘 다 앞쪽 일부만 본다(뒤 순위 lookahead m, 앞 순위 leader_ahead m). 멀리서부터 비키지 않고 가까워졌을 때만 양보한다.
+# - back: 뒤 순위 로봇이 앞 순위의 앞쪽 경로 위에 서 있다 → 뒤로 물러나 길을 비킨다
+# - stop: 뒤 순위의 앞쪽 경로가 앞 순위의 앞쪽 경로와 가깝다 → 그 자리에 멈춰 기다린다
+# - go:   겹치지 않는다(앞 순위가 지나가면 남은 경로가 줄어 저절로 go가 된다)
+# 경로는 Nav2 계획 경로(/plan)의 점 목록 [(x, y), ...]. 앞 순위가 멈춰 있으면(목표 없음) 보지 않는다 — 서 있는 로봇은 Nav2가 장애물로 피한다.
+
+def segment_distance(a, b, c, d):
+    """선분 a-b와 c-d 사이 가장 가까운 거리 [m]. 교차하면 0."""
+    def cross(o, p, q):
+        return (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0])
+    d1, d2, d3, d4 = cross(c, d, a), cross(c, d, b), cross(a, b, c), cross(a, b, d)
+    if ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0)) and 0 not in (d1, d2, d3, d4):
+        return 0.0
+    return min(distance_to_segment(*a, c, d), distance_to_segment(*b, c, d),
+               distance_to_segment(*c, a, b), distance_to_segment(*d, a, b))
+
+
+def polyline_distance(p, q):
+    """점 목록 두 개(꺾은선) 사이 가장 가까운 거리 [m]. 한쪽이 비면 inf. 점 하나짜리도 된다."""
+    if not p or not q:
+        return math.inf
+    p = p if len(p) > 1 else [p[0], p[0]]
+    q = q if len(q) > 1 else [q[0], q[0]]
+    return min(segment_distance(a, b, c, d) for a, b in zip(p, p[1:]) for c, d in zip(q, q[1:]))
+
+
+def path_ahead(pose, path, length):
+    """pose에서 시작해 path를 따라 length m까지만 자른 꺾은선."""
+    out, left = [tuple(pose)], length
+    for point in path:
+        step = math.hypot(point[0] - out[-1][0], point[1] - out[-1][1])
+        if step >= left:
+            t = left / step if step else 0.0
+            out.append((out[-1][0] + t * (point[0] - out[-1][0]), out[-1][1] + t * (point[1] - out[-1][1])))
+            break
+        out.append(tuple(point))
+        left -= step
+    return out
+
+
+class YieldRule:
+    """robot = {'pose': (x, y) 또는 None, 'active': 목표 진행 중인가, 'path': [(x, y), ...]}."""
+
+    def __init__(self, config=None):
+        config = config or {}
+        self.distance = config.get('yield_distance', 0.30)    # 두 경로가 이보다 가까우면 겹친다고 본다
+        self.release = config.get('yield_release', 0.10)      # 양보를 풀려면 distance + release 넘게 떨어져야 한다(떨림 방지)
+        self.lookahead = config.get('yield_lookahead', 1.0)   # 뒤 순위 로봇은 앞쪽 이만큼의 경로만 본다
+        # 앞 순위 로봇도 앞쪽 이만큼만 본다: 멀리서 올 로봇 때문에 미리 비키지 않고, 가까워졌을 때만 양보한다
+        self.leader_ahead = config.get('yield_leader_ahead', 0.8)
+
+    def decide(self, leader, follower, prev='go'):
+        """뒤 순위 로봇이 할 일 ('go' | 'stop' | 'back', 이유). prev는 지난번 결정(떨림 방지)."""
+        if not follower['pose']:
+            return 'go', '위치 모름'
+        if not leader['active'] or not leader['pose']:
+            return 'go', ''
+        # 떨림 방지 여유는 지금 하고 있는 동작에만 붙인다(멈춰 기다리던 로봇이 여유 때문에 뒤로 가지 않게)
+        back_gap = self.distance + (self.release if prev == 'back' else 0.0)
+        stop_gap = self.distance + (self.release if prev != 'go' else 0.0)
+        lead = path_ahead(leader['pose'], leader.get('path') or [], self.leader_ahead)
+        if polyline_distance([tuple(follower['pose'])], lead) < back_gap:
+            return 'back', '앞 순위 로봇의 경로 위에 있어요 — 뒤로 비켜요'
+        ahead = path_ahead(follower['pose'], follower.get('path') or [], self.lookahead)
+        if polyline_distance(ahead, lead) < stop_gap:
+            return 'stop', '앞 순위 로봇과 경로가 겹쳐요 — 지나갈 때까지 기다려요'
+        return 'go', ''

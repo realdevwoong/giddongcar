@@ -81,7 +81,7 @@ class FleetTests(unittest.TestCase):
 
         def robot(online=True, nav2=True, accepted=True, amcl=1, cancel=True, cancel_code=0):
             return SimpleNamespace(
-                command_lock=threading.Lock(), lock=threading.RLock(), targets={},
+                command_lock=threading.Lock(), lock=threading.RLock(), targets={}, backup_handle=None,
                 snapshot=lambda: dict(online=online, pose={'x': 0} if online else None),
                 get_clock=lambda: SimpleNamespace(now=lambda: Time(seconds=1)),
                 localizer=Localizer(known=True), stop_spin=Mock(return_value=False),
@@ -386,16 +386,25 @@ class FleetTests(unittest.TestCase):
 
 
 class TrafficRobot:
-    """교통 정리 시험용 가짜 로봇: 위치·목표 진행 여부만 있고, 받은 명령을 기록한다."""
+    """교통 정리 시험용 가짜 로봇: 위치·목표 진행·계획 경로만 있고, 받은 명령을 기록한다."""
     def __init__(self, name, x, y, active=False):
         self.name, self.pose, self.active = name, dict(x=x, y=y, yaw=0.0), active
+        self.path, self.target = [], None
         self.lock = threading.RLock()
         self.map_id, self.map_data = 'same', GOOD3
         self.command = Mock(return_value='목적지 수락')
+        self.backing = SimpleNamespace(done=lambda: True)    # 후진은 바로 끝난 것으로
+        self.back_up = Mock(return_value=self.backing)
+
+    def drive(self, x0, y0, x1, y1):
+        """(x0, y0)에서 (x1, y1)로 가는 중: 위치·경로·목적지를 그렇게 둔다."""
+        self.pose, self.active = dict(x=x0, y=y0, yaw=0.0), True
+        self.path = [dict(x=x0 + (x1 - x0) * i / 20, y=y0 + (y1 - y0) * i / 20) for i in range(21)]
+        self.target = dict(x=x1, y=y1, yaw=0.0)
 
     def snapshot(self):
-        return dict(id=self.name, map_id=self.map_id, online=True, pose=self.pose,
-                    nav=dict(active=self.active))
+        return dict(id=self.name, map_id=self.map_id, online=True, pose=self.pose, path=self.path,
+                    nav=dict(active=self.active, target=self.target))
 
 
 GOOD3 = dict(width=84, height=56, resolution=0.05, origin=dict(x=-1.067, y=-0.171, yaw=0.0))
@@ -410,81 +419,126 @@ class TrafficFleetTests(unittest.TestCase):
     def goal(self, robot, x, y):
         return self.fleet.command(robot, 'goal', dict(x=x, y=y, yaw=0.0))
 
-    def test_crossing_goal_waits_and_leaves_by_itself_when_the_door_frees(self):
+    def yielding(self):
+        return self.fleet.state()['traffic']['yielding']
+
+    def test_both_goals_leave_at_once_even_if_routes_cross(self):
         self.goal('robot1', 2.10, 1.05)
-        self.r1.command.assert_called_once_with('goal', dict(x=2.10, y=1.05, yaw=0.0))
         self.r1.active = True
-        message = self.goal('robot2', 0.30, 1.00)
-        self.assertIn('칸 대기', message)
-        self.r2.command.assert_not_called()                                 # Nav2로 안 보냈다
-        self.assertEqual(self.fleet.state()['traffic']['routes'], {'robot1': ['left_bottom', 'left_top', 'right_front']})
-        self.fleet.traffic_tick()
-        self.r2.command.assert_not_called()                                 # robot1 이동 중
-        self.fleet.gate.granted['robot1'] -= 10                          # 건너는 데 시간이 흘렀다(출발 유예 5초 지남)
-        self.r1.active, self.r1.pose = False, dict(x=2.10, y=1.05, yaw=0.0)  # 도착, 문에서 벗어남
-        self.fleet.traffic_tick()
+        self.goal('robot2', 0.30, 1.00)                                     # 예약하지 않고 바로 보낸다
         self.r2.command.assert_called_once_with('goal', dict(x=0.30, y=1.00, yaw=0.0))
-        self.assertIn('칸이 비어 자동 출발', self.fleet.state()['traffic']['note'])
 
-    def test_holding_stops_a_robot_that_was_going_elsewhere(self):
-        self.goal('robot1', 2.10, 1.05)
-        self.r1.active = self.r2.active = True
-        self.goal('robot2', 0.30, 1.00)
-        self.r2.command.assert_called_once_with('stop', {})
+    def test_robot2_stops_for_robot1_and_resumes_after_it_passes(self):
+        self.r1.drive(1.0, 1.05, 2.1, 1.05)                                 # 문을 왼→오로 건너는 중
+        self.r2.drive(2.0, 0.40, 1.9, 1.05)                                 # 옆에서 문 쪽으로 오는 중
+        self.fleet.traffic_tick()
+        self.r2.command.assert_called_once_with('stop', {})                 # Nav2 목표를 멈췄다
+        self.assertEqual(self.yielding()['action'], 'stop')
+        self.r2.active = False                                              # 취소됨
+        self.fleet.traffic_tick()
+        self.assertEqual(self.r2.command.call_count, 1)                     # robot1이 아직 지나는 중
+        self.r1.active = False                                              # robot1 도착
+        self.fleet.traffic_tick()
+        self.r2.command.assert_called_with('goal', dict(x=1.9, y=1.05, yaw=0.0))   # 원래 목적지로 다시
+        self.assertEqual(self.yielding()['action'], 'go')
+        self.r1.command.assert_not_called()                                 # robot1은 건드리지 않는다
 
-    def test_goal_next_to_the_door_or_on_a_parked_robot_is_rejected(self):
-        for (x, y), code in (((1.60, 1.05), 'near_zone'), ((1.95, 0.35), 'near_robot')):
+    def test_robot2_backs_off_robot1_path(self):
+        self.r1.drive(1.0, 1.05, 2.1, 1.05)
+        self.r2.drive(1.8, 1.05, 0.4, 1.05)                                 # 문 안에서 정면으로 만남
+        self.fleet.traffic_tick()
+        self.r2.command.assert_called_once_with('stop', {})                 # 먼저 Nav2 목표를 멈추고
+        self.r2.back_up.assert_called_once_with(dashboard.BACK_STEP, dashboard.BACK_SPEED)   # 물러난다
+        self.assertEqual(self.yielding()['action'], 'back')
+
+    def test_backing_is_limited_then_waits(self):
+        self.r1.drive(1.0, 1.05, 2.1, 1.05)
+        self.r2.drive(1.8, 1.05, 0.4, 1.05)
+        for _ in range(dashboard.BACK_LIMIT + 2):                           # 물러나도 위치가 그대로(벽에 막힘)
+            self.fleet.traffic_tick()
+        self.assertEqual(self.r2.back_up.call_count, dashboard.BACK_LIMIT)
+        self.assertEqual(self.yielding()['action'], 'stop')
+
+    def test_waits_while_backing_is_in_progress(self):
+        self.r1.drive(1.0, 1.05, 2.1, 1.05)
+        self.r2.drive(1.8, 1.05, 0.4, 1.05)
+        self.r2.backing.done = lambda: False
+        for _ in range(3):
+            self.fleet.traffic_tick()
+        self.r2.back_up.assert_called_once()
+
+    def test_robot2_without_a_goal_is_left_alone(self):
+        self.r1.drive(1.0, 1.05, 2.1, 1.05)
+        self.r2.pose = dict(x=1.8, y=1.05, yaw=0.0)                         # 길 위에 서 있지만 목표 없음
+        self.fleet.traffic_tick()
+        self.r2.command.assert_not_called()
+        self.r2.back_up.assert_not_called()
+
+    def test_human_stop_while_yielding_is_a_success_and_no_resume(self):
+        self.r1.drive(1.0, 1.05, 2.1, 1.05)
+        self.r2.drive(2.0, 0.40, 1.9, 1.05)
+        self.fleet.traffic_tick()                                           # 양보로 멈춤
+        self.r2.active = False
+        self.r2.command.side_effect = CommandError('Nav2가 취소 요청을 수락하지 않았습니다.', 'cancel_rejected')
+        self.assertIn('양보 중이던 목표 취소', self.fleet.command('robot2', 'stop', {}))
+        self.r2.command.side_effect = None
+        self.r1.active = False
+        self.fleet.traffic_tick()
+        self.assertNotIn('goal', [c.args[0] for c in self.r2.command.call_args_list])   # 다시 출발하지 않는다
+
+    def test_goal_next_to_the_door_or_on_another_goal_is_rejected(self):
+        self.r2.drive(2.0, 0.5, 2.7, 1.1)                                   # robot2가 (2.7, 1.1)로 가는 중
+        for (x, y), code in (((1.60, 1.05), 'near_zone'), ((2.75, 1.05), 'near_robot')):
             with self.subTest(code):
                 with self.assertRaises(CommandError) as caught:
                     self.goal('robot1', x, y)
                 self.assertEqual(caught.exception.code, code)
         self.r1.command.assert_not_called()
 
-    def test_stop_forgets_the_waiting_goal(self):
-        self.goal('robot1', 2.10, 1.05)
-        self.r1.active = True
-        self.goal('robot2', 0.30, 1.00)
-        self.fleet.command('robot2', 'stop', {})
-        self.fleet.gate.granted['robot1'] -= 10
-        self.r1.active, self.r1.pose = False, dict(x=2.10, y=1.05, yaw=0.0)
-        self.fleet.traffic_tick()
-        self.assertEqual([c.args[0] for c in self.r2.command.call_args_list], ['stop'])  # 자동 출발 없음
+    def test_robots_can_swap_places(self):
+        # 서 있는 다른 로봇 자리는 곧 빌 수 있어 막지 않는다
+        self.goal('robot1', 2.0, 0.5)
+        self.goal('robot2', 0.5, 0.5)
+        self.r1.command.assert_called_once_with('goal', dict(x=2.0, y=0.5, yaw=0.0))
+        self.r2.command.assert_called_once_with('goal', dict(x=0.5, y=0.5, yaw=0.0))
 
-    def test_timeout_keeps_the_keys_but_a_clear_failure_returns_them(self):
-        # Wi-Fi가 느려 4초를 넘기면 목표가 닿았을 수 있다: 열쇠를 쥔 채 둔다
-        self.r1.command.side_effect = TimeoutError('응답 시간 초과')
-        with self.assertRaises(TimeoutError):
-            self.goal('robot1', 2.10, 1.05)
-        self.assertEqual(self.fleet.gate.owner['right_front'], 'robot1')
-        self.fleet.gate.release_all('robot1')
-        self.r1.command.side_effect = CommandError('Nav2가 목적지를 거부했습니다.', 'goal_rejected')
+    def fail(self, robot, goal_id, code=104):
+        robot.active = False
+        robot.snapshot = lambda: dict(id=robot.name, map_id='same', online=True, pose=robot.pose, path=[],
+                                      nav=dict(active=False, state='aborted', id=goal_id, error_code=code,
+                                               target=dict(x=0.1, y=0.98, yaw=0.0)))
+
+    def test_blocked_goal_is_sent_again_up_to_the_limit(self):
+        for i in range(dashboard.RETRY_LIMIT + 1):
+            self.fail(self.r2, f'goal{i}')
+            self.fleet.retry_tick()
+            self.fleet.retry_tick()                                         # 같은 실패를 두 번 보내지 않는다
+        self.assertEqual(self.r2.command.call_count, dashboard.RETRY_LIMIT)
+        self.r2.command.assert_called_with('goal', dict(x=0.1, y=0.98, yaw=0.0))
+        self.assertIn('다시 보내도 실패', self.fleet.state()['traffic']['note'])
+
+    def test_other_failures_are_not_retried(self):
+        self.fail(self.r2, 'goal0', code=206)                               # 목적지가 장애물 위: 다시 해도 같다
+        self.fleet.retry_tick()
+        self.r2.command.assert_not_called()
+
+    def test_human_goal_resets_the_retry_count(self):
+        for i in range(dashboard.RETRY_LIMIT):
+            self.fail(self.r2, f'goal{i}')
+            self.fleet.retry_tick()
+        self.r2.snapshot = TrafficRobot.snapshot.__get__(self.r2)
+        self.goal('robot2', 0.30, 1.00)                                     # 사람이 다시 보냄
+        self.fail(self.r2, 'goal9')
+        self.fleet.retry_tick()
+        self.r2.command.assert_called_with('goal', dict(x=0.1, y=0.98, yaw=0.0))   # 다시 3번까지
+
+    def test_rejected_new_goal_still_forgets_the_yielded_goal(self):
+        self.r1.drive(1.0, 1.05, 2.1, 1.05)
+        self.r2.drive(2.0, 0.40, 1.9, 1.05)
+        self.fleet.traffic_tick()                                           # 양보로 멈춤
         with self.assertRaises(CommandError):
-            self.goal('robot1', 2.10, 1.05)
-        self.assertIsNone(self.fleet.gate.owner['right_front'])   # 확실히 못 보냄: 반납
-
-    def test_rejected_new_goal_still_clears_the_old_waiting_goal(self):
-        self.goal('robot1', 2.10, 1.05)
-        self.r1.active = True
-        self.goal('robot2', 0.30, 1.00)                            # 대기
-        with self.assertRaises(CommandError):
-            self.goal('robot2', 1.60, 1.05)                        # 문 안: 거절
-        self.assertEqual(self.fleet.gate.pending, [])              # 옛 대기 목표가 나중에 출발하지 않는다
-
-    def test_hold_is_refused_when_the_old_goal_cannot_be_stopped(self):
-        self.goal('robot1', 2.10, 1.05)
-        self.r1.active = self.r2.active = True
-        self.r2.command.side_effect = TimeoutError('응답 시간 초과')   # 멈추기 실패
-        with self.assertRaises(CommandError) as caught:
-            self.goal('robot2', 0.30, 1.00)
-        self.assertEqual(caught.exception.code, 'hold_stop_failed')
-        self.assertEqual(self.fleet.gate.pending, [])
-
-    def test_cancel_on_a_waiting_robot_is_a_success(self):
-        self.goal('robot1', 2.10, 1.05)
-        self.r1.active = True
-        self.goal('robot2', 0.30, 1.00)
-        self.r2.command.side_effect = CommandError('Nav2가 취소 요청을 수락하지 않았습니다.', 'cancel_rejected')
-        self.assertIn('대기 목표 취소', self.fleet.command('robot2', 'stop', {}))
+            self.goal('robot2', 1.60, 1.05)                                 # 문 안: 거절
+        self.assertIsNone(self.yielding()['target'])                        # 옛 목적지로 나중에 출발하지 않는다
 
     def test_wrong_map_turns_traffic_control_off(self):
         self.r1.map_data = self.r2.map_data = dict(GOOD3, width=90)

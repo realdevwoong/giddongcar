@@ -20,10 +20,10 @@ from rclpy.time import Time
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy, qos_profile_sensor_data
 from nav_msgs.msg import OccupancyGrid, Path as NavPath, Odometry
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist, Vector3
-from nav2_msgs.action import NavigateToPose
+from nav2_msgs.action import BackUp, NavigateToPose
 from pinky_interfaces.srv import SetLamp
 from pinky_fleet.localize import Localizer, SPIN_SPEED
-from pinky_fleet.traffic import TrafficGate, load_zones, map_mismatch
+from pinky_fleet.traffic import TrafficGate, YieldRule, load_zones, map_mismatch
 from action_msgs.msg import GoalStatus, GoalStatusArray
 from action_msgs.srv import CancelGoal
 from lifecycle_msgs.msg import State
@@ -65,6 +65,15 @@ LAMP_HOLD = 5.0     # 도착·취소 색을 보여 주는 시간(초). 그다음
 LAMP_TIMEOUT = 3.0  # 램프 서비스가 이 시간(초) 안에 답이 없으면 실패로 보고 다시 보낸다
 LOC_TIMEOUT = 5.0   # AMCL 서비스(상태 확인·전역 찾기·가만히 확인)가 이 시간(초) 안에 답이 없으면 버리고 다시 한다
 
+# 달리면서 양보: 겹치면 LEADER가 먼저 가고 FOLLOWER가 멈추거나 물러난다(사용자가 정한 고정 순위)
+LEADER, FOLLOWER = 'robot1', 'robot2'
+BACK_STEP = 0.15    # 한 번에 물러나는 거리 [m]
+BACK_SPEED = 0.08   # 물러나는 속도 [m/s]
+BACK_LIMIT = 3      # 이만큼 연달아 물러나도 길 위면 더 물러나지 않고 멈춰 기다린다(벽까지 계속 가지 않게)
+# 막혀서 실패한 목표는 같은 목적지로 다시 보낸다. 좁은 문에서 RPP 충돌 검사가 문틀에 걸려 104로 끝나도
+# 다시 보내면 지나가는 경우가 많다. 0 = 복구를 다 쓰고 이유 없이 끝남
+RETRY_CODES = {0, 104, 105, 106}
+RETRY_LIMIT = 3
 
 class CommandError(ValueError):
     """명령 실패. code는 화면이 글자 대신 보고 판단하는 이름이다(예: 'map_mismatch')."""
@@ -93,6 +102,13 @@ def pose_input(body):
     if not all(math.isfinite(v) for v in values):
         raise CommandError('Coordinates must be finite', 'bad_pose')
     return values
+
+
+def yield_view(snapshot):
+    """Robot.snapshot() → 양보 규칙이 보는 {pose (x, y), active, path [(x, y), ...]}."""
+    pose = snapshot['pose']
+    return dict(pose=(pose['x'], pose['y']) if pose else None, active=snapshot['nav']['active'],
+                path=[(p['x'], p['y']) for p in snapshot.get('path') or []])
 
 
 def await_future(future, timeout=4):
@@ -147,6 +163,8 @@ class Robot(Node):
         self.initial = self.create_publisher(PoseWithCovarianceStamped, 'initialpose', 10)
         self.navigator = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self.cancel = self.create_client(CancelGoal, 'navigate_to_pose/_action/cancel_goal')
+        self.backup = ActionClient(self, BackUp, 'backup')   # Nav2 behavior_server 후진(충돌 검사 포함)
+        self.backup_handle = None
         self.lamp_client = self.create_client(SetLamp, 'set_lamp')
         self.create_subscription(PoseWithCovarianceStamped, 'amcl_pose', self.on_amcl_pose, transient)
         self.amcl_state = self.create_client(GetState, 'amcl/get_state')
@@ -398,6 +416,10 @@ class Robot(Node):
         with self.command_lock:
             if action == 'stop':
                 spun = self.stop_spin()
+                with self.lock:
+                    backing, self.backup_handle = self.backup_handle, None
+                if backing:   # 양보하느라 물러나던 중이면 그것도 멈춘다
+                    backing.cancel_goal_async()
                 try:
                     if not self.cancel.wait_for_service(timeout_sec=1):
                         raise CommandError('Nav2 취소 서비스가 준비되지 않았습니다.', 'cancel_unavailable')
@@ -449,6 +471,21 @@ class Robot(Node):
             handle.get_result_async().add_done_callback(lambda future: self.on_result(goal_id, future))
             return '목적지 수락 — 이동 상태를 확인하세요.'
 
+    def back_up(self, distance, speed):
+        """Nav2 후진 동작으로 distance m 물러난다(뒤에 장애물이 있으면 Nav2가 멈춘다). 결과 future를 돌려준다.
+        Nav2 목표는 먼저 취소해 둬야 한다(둘 다 cmd_vel을 보낸다)."""
+        if not self.backup.wait_for_server(timeout_sec=1):
+            raise CommandError('Nav2 후진 동작이 준비되지 않았습니다.', 'backup_unavailable')
+        goal = BackUp.Goal()
+        goal.target.x, goal.speed = float(distance), float(speed)
+        goal.time_allowance.sec = int(distance / speed) + 5
+        handle = await_future(self.backup.send_goal_async(goal))
+        if not handle.accepted:
+            raise CommandError('Nav2가 후진을 거부했습니다.', 'backup_rejected')
+        with self.lock:
+            self.backup_handle = handle
+        return handle.get_result_async()
+
     def start_spin(self):
         """전역 찾기를 새로 뿌리고 제자리에서 한 바퀴 돈다. 사람이 로봇 주변을 보고 누르는 버튼에서만 부른다."""
         state = self.snapshot()
@@ -484,12 +521,22 @@ class Robot(Node):
 class Fleet:
     def __init__(self, robots, zones=None):
         self.robots = robots
-        # 교통 정리(칸 열쇠). zones가 없으면 끈다. 지도가 구역 파일과 다르면 첫 확인 때 스스로 끈다
+        # 교통 정리. zones가 없으면 끈다. 지도가 구역 파일과 다르면 첫 확인 때 스스로 끈다.
+        # 칸 정보(gate)는 목적지 검사에만 쓰고, 움직이는 중 판단은 양보 규칙(rule)이 한다
         self.gate = TrafficGate(zones) if zones else None
-        self.traffic_lock = threading.Lock()   # HTTP 스레드와 교통 스레드가 열쇠를 동시에 만지지 않게
+        self.rule = YieldRule(zones) if zones else None
+        # 양보 상태와 FOLLOWER 명령을 한 번에 하나씩: 교통 스레드가 멈추는 사이 사람이 새 목표를 주는 경우 등
+        self.traffic_lock = threading.RLock()
         self.traffic_off = None if zones else '구역 파일 없음'
         self.traffic_note = None               # 마지막 교통 정리 오류·알림
         self.traffic_stop = threading.Event()
+        self.yielding = self.no_yield()
+        self.retries = {}   # 로봇별 다시 보내기 {target, count, seen: 마지막으로 처리한 실패 목표 id}
+
+    @staticmethod
+    def no_yield():
+        # action: go | stop | back, target: 멈추기 전 목적지(다시 보낼 것), backs: 연달아 물러난 횟수, backing: 후진 결과 future
+        return dict(action='go', target=None, reason='', backs=0, backing=None)
 
     def map(self):
         for robot in self.robots.values():
@@ -508,9 +555,10 @@ class Fleet:
     def traffic_state(self):
         if not self.gate:
             return dict(enabled=False, off=self.traffic_off)
-        with self.traffic_lock:
-            snap = self.gate.snapshot(time.monotonic())
-        return dict(enabled=self.traffic_off is None, off=self.traffic_off, note=self.traffic_note, **snap)
+        # 잠그지 않고 읽는다: 교통 스레드가 멈추기·물러나기 명령(최대 4초)을 하는 동안에도 화면 갱신이 막히지 않게
+        y = self.yielding
+        shown = dict(robot=FOLLOWER, leader=LEADER, action=y['action'], reason=y['reason'], target=y['target'])
+        return dict(enabled=self.traffic_off is None, off=self.traffic_off, note=self.traffic_note, yielding=shown)
 
     def command(self, robot_id, action, body):
         if robot_id not in self.robots or action not in ('goal', 'initialpose', 'stop', 'spin'):
@@ -520,59 +568,33 @@ class Fleet:
             map_id, _ = self.map()
             if not map_id or robot.snapshot()['map_id'] != map_id:
                 raise CommandError('공통 지도 수신을 기다리세요. 두 로봇의 지도가 같아야 합니다.', 'map_mismatch')
-        waiting = False
-        if action in ('stop', 'goal') and self.gate:
-            with self.traffic_lock:   # 사람이 취소하거나 새 목표를 주면(거절되더라도) 기다리던 목표는 지운다
-                waiting = any(p['robot'] == robot_id for p in self.gate.pending)
-                self.gate.cancel(robot_id)
-        if action == 'goal' and self.gate and self.traffic_off is None:
-            return self.command_goal(robot_id, robot, body)
-        try:
-            return robot.command(action, body)
-        except CommandError as exc:
-            if waiting and exc.code == 'cancel_rejected':   # 대기 중이라 Nav2 목표가 없었다
-                return '대기 목표 취소 — 자동 출발하지 않아요'
-            raise
-
-    def command_goal(self, robot_id, robot, body):
-        """지나갈 칸 열쇠를 모두 받을 수 있을 때만 보낸다. 아니면 보류했다가 traffic_tick이 보낸다."""
-        x, y, heading = pose_input(body)
-        target = dict(x=x, y=y, yaw=heading)
-        me = robot.snapshot()
-        if not me['online'] or me['pose'] is None:
-            raise CommandError('로봇 연결과 지도상의 초기 위치를 먼저 확인하세요.', 'no_pose')
-        robots = self.traffic_robots()
         with self.traffic_lock:
-            problem = self.gate.check_target(robot_id, target, robots)
+            self.retries.pop(robot_id, None)      # 사람이 명령하면 다시 보내기 횟수는 새로 센다
+        if robot_id != FOLLOWER or not self.gate:
+            return self.send_command(robot_id, robot, action, body)
+        with self.traffic_lock:   # 사람이 명령하면(거절되더라도) 양보하며 쥐고 있던 목적지는 버린다
+            paused = self.yielding['action'] != 'go'
+            self.yielding = self.no_yield()
+            try:
+                return self.send_command(robot_id, robot, action, body)
+            except CommandError as exc:
+                if paused and exc.code == 'cancel_rejected':   # 양보로 멈춰 있어 Nav2 목표가 없었다
+                    return '양보 중이던 목표 취소 — 다시 출발하지 않아요'
+                raise
+
+    def send_command(self, robot_id, robot, action, body):
+        """목적지는 칸 검사(통로 앞·다른 로봇의 목적지)만 하고 바로 보낸다. 겹치면 달리는 중에 traffic_tick이 양보시킨다.
+        다른 로봇이 지금 서 있는 자리는 막지 않는다: 자리 바꾸기처럼 곧 떠날 수 있고, 안 떠나면 Nav2가 장애물로 본다."""
+        if action == 'goal' and self.gate and self.traffic_off is None:
+            x, y, heading = pose_input(body)
+            problem = self.gate.check_target(robot_id, dict(x=x, y=y, yaw=heading), self.traffic_robots(),
+                                             parked=False)
             if problem:
                 raise CommandError(problem[1], problem[0])
-            try:
-                decision, detail = self.gate.request(robot_id, (me['pose']['x'], me['pose']['y']), target,
-                                                     time.monotonic(), robots)
-            except ValueError as exc:
-                raise CommandError(str(exc), 'no_route') from None
-        if decision == 'hold':
-            if me['nav']['active']:   # 다른 곳으로 가던 중이면 멈춘다. 새 목표를 줬으니 옛 목표로 가면 안 된다
-                try:
-                    robot.command('stop', {})
-                except Exception:     # 못 멈췄으면 기다리게 두면 안 된다(옛 목표로 달리는 중)
-                    with self.traffic_lock:
-                        self.gate.cancel(robot_id)
-                    raise CommandError('가던 목표를 멈추지 못해 새 목표를 대기시키지 않았어요 — '
-                                       '■ 이동 취소 후 다시 보내세요', 'hold_stop_failed') from None
-            blocker, why = detail
-            return f'칸 대기 — {blocker}: {why}. 비면 자동으로 출발해요.'
-        try:
-            return robot.command('goal', body)
-        except CommandError:
-            with self.traffic_lock:
-                self.gate.release_all(robot_id)   # 확실히 못 보냈으니 방금 받은 열쇠를 돌려놓는다
-            raise
-        # 시간 초과(TimeoutError)는 목표가 Nav2에 닿았을 수 있어 열쇠를 쥔 채 둔다.
-        # 로봇이 실제로 안 움직였다면 start_grace 뒤 update가 반납한다.
+        return robot.command(action, body)
 
     def traffic_robots(self):
-        """열쇠 규칙이 보는 로봇 상태 {id: {pose, active, target}}. pose·target은 (x, y), 연결이 끊기면 pose는 None."""
+        """칸 검사가 보는 로봇 상태 {id: {pose, active, target}}. pose·target은 (x, y), 연결이 끊기면 pose는 None."""
         robots = {}
         for robot_id, robot in self.robots.items():
             s = robot.snapshot()
@@ -582,8 +604,33 @@ class Fleet:
                                     target=(target['x'], target['y']) if target else None)
         return robots
 
+    def retry_tick(self):
+        """막혀서 실패한 목표(RETRY_CODES)를 같은 목적지로 RETRY_LIMIT번까지 다시 보낸다. 사람이 새 목적지를 주면 횟수를 새로 센다."""
+        for robot_id, robot in self.robots.items():
+            nav = robot.snapshot()['nav']
+            target, code = nav.get('target'), nav.get('error_code')
+            if nav.get('state') != 'aborted' or not target or code not in RETRY_CODES:
+                continue                          # 결과(error_code)가 아직 안 왔으면 다음 번에 본다
+            if robot_id == FOLLOWER and self.yielding['action'] != 'go':
+                continue                          # 양보 중: 양보가 끝나면 다시 보낸다
+            r = self.retries.get(robot_id)
+            if r and r['seen'] == nav['id']:
+                continue                          # 이 실패는 이미 처리했다
+            if not r or r['target'] != target:
+                r = self.retries[robot_id] = dict(target=target, count=0, seen=None)
+            r['seen'] = nav['id']
+            if r['count'] >= RETRY_LIMIT:
+                self.traffic_note = f'{robot_id} {RETRY_LIMIT}번 다시 보내도 실패 — 길을 확인하고 직접 보내 주세요'
+                continue
+            r['count'] += 1
+            try:
+                robot.command('goal', target)
+                self.traffic_note = f'{robot_id} 막혀서 실패 → 다시 보냄 ({r["count"]}/{RETRY_LIMIT})'
+            except Exception as exc:
+                self.traffic_note = f'{robot_id} 다시 보내기 실패: {exc}'
+
     def traffic_tick(self):
-        """0.2초마다: 지도 확인, 열쇠 반납, 기다리던 목표 자동 출발."""
+        """0.2초마다: 지도 확인 후 FOLLOWER 양보 판단."""
         if not self.gate or self.traffic_off:
             return
         _, map_data = self.map()
@@ -593,23 +640,53 @@ class Fleet:
         if mismatch:
             with self.traffic_lock:
                 self.traffic_off = f'교통 정리 꺼짐: {mismatch}'
-                self.gate.pending.clear()
+                self.yielding = self.no_yield()
             return
-        robots = self.traffic_robots()
         with self.traffic_lock:
-            ready, dropped = self.gate.update(robots, time.monotonic())
-        for robot_id, reason in dropped:
-            self.traffic_note = f'{robot_id} 대기 목표를 버렸어요: {reason} — 다시 보내 주세요'
-        for robot_id, target in ready:
-            try:
-                self.robots[robot_id].command('goal', target)
-                self.traffic_note = f'{robot_id} 칸이 비어 자동 출발'
-            except CommandError as exc:          # 확실히 못 보냄: 열쇠 반납
-                with self.traffic_lock:
-                    self.gate.release_all(robot_id)
-                self.traffic_note = f'{robot_id} 자동 출발 실패: {exc} — 다시 보내 주세요'
-            except Exception as exc:             # 시간 초과 등: 닿았을 수 있어 열쇠는 쥔 채 둔다
-                self.traffic_note = f'{robot_id} 자동 출발 응답 없음: {exc} — 로봇 상태를 확인하세요'
+            self.yield_tick()
+
+    def yield_tick(self):
+        """FOLLOWER가 할 일을 정하고 바꿀 때만 명령한다. traffic_lock 안에서 부른다."""
+        y, follower = self.yielding, self.robots[FOLLOWER]
+        if y['backing'] is not None and not y['backing'].done():
+            return                                # 물러나는 중: 끝나면 다시 본다
+        y['backing'] = None
+        lead, me = self.robots[LEADER].snapshot(), follower.snapshot()
+        if y['action'] == 'go' and not me['nav']['active']:
+            return                                # 목표 없이 서 있는 로봇은 건드리지 않는다
+        action, reason = self.rule.decide(yield_view(lead), yield_view(me), y['action'])
+        if action == 'back' and y['backs'] >= BACK_LIMIT:
+            action, reason = 'stop', f'{BACK_LIMIT}번 물러나도 {LEADER} 길 위예요 — 멈춰서 기다려요'
+        elif action == 'stop':
+            y['backs'] = 0                        # 길에서 벗어났다: 다음에 다시 길 위가 되면 또 물러날 수 있다
+        if action == y['action'] == 'go':
+            return
+        if action == 'go':
+            self.resume(y, follower)
+            return
+        if y['action'] == 'go':                   # 달리던 중: 목적지를 기억하고 Nav2 목표를 멈춘다
+            target = me['nav'].get('target')
+            if not target:
+                self.traffic_note = f'{FOLLOWER} 목적지를 몰라(RViz로 보낸 목표?) 양보할 수 없어요'
+                return
+            follower.command('stop', {})
+            y['target'] = target
+            self.traffic_note = f'{FOLLOWER} 양보 — {LEADER} 먼저'
+        y['action'], y['reason'] = action, reason
+        if action == 'back':
+            y['backs'] += 1
+            y['backing'] = follower.back_up(BACK_STEP, BACK_SPEED)
+
+    def resume(self, y, follower):
+        target = y['target']
+        self.yielding = self.no_yield()
+        if not target:
+            return
+        try:
+            follower.command('goal', target)
+            self.traffic_note = f'{FOLLOWER} {LEADER}이 지나가서 다시 출발'
+        except Exception as exc:                  # 못 보냈으면 사람이 다시 보낸다(멈춰 있으니 안전하다)
+            self.traffic_note = f'{FOLLOWER} 다시 출발 실패: {exc} — 목적지를 다시 보내 주세요'
 
     def run_traffic(self, period=0.2):
         """교통 스레드 본체. 오류가 나도 멈추지 않는다(대시보드가 죽으면 launch 전체가 꺼진다)."""
@@ -618,6 +695,11 @@ class Fleet:
                 self.traffic_tick()
             except Exception as exc:
                 self.traffic_note = f'교통 정리 오류: {exc}'
+            try:
+                with self.traffic_lock:
+                    self.retry_tick()
+            except Exception as exc:
+                self.traffic_note = f'다시 보내기 오류: {exc}'
 
 
 def handler_for(fleet):
@@ -692,8 +774,7 @@ def main():
             name = f'robot{i}'
             robots[name] = Robot(name, domain, args.use_sim_time, name in args.known_pose, args.auto_spin)
         fleet = Fleet(robots, zones)
-        if fleet.gate:
-            threading.Thread(target=fleet.run_traffic, daemon=True).start()
+        threading.Thread(target=fleet.run_traffic, daemon=True).start()   # 교통 정리가 꺼져도 다시 보내기는 돈다
         server = ThreadingHTTPServer((args.host, args.port), handler_for(fleet))
         print(f'Fleet dashboard: http://{args.host}:{args.port}'
               + (' · 교통 정리 켬' if fleet.gate else ' · 교통 정리 끔'), flush=True)
