@@ -272,6 +272,8 @@ dialog dt { font-weight: 700; }
     <span class="alert-text" id="alertText"></span><span class="alert-more" id="alertMore"></span>
     <button type="button" class="alert-ack" id="alertAck" title="이 알림을 숨겨요. 로봇에는 아무것도 보내지 않아요.">알림 끄기</button>
   </div>
+  <button type="button" class="btn" id="goAll" aria-disabled="true"
+    title="목적지를 찍어 둔 로봇을 한꺼번에 출발시킵니다">▶ 둘 다 출발</button>
   <button type="button" class="btn cancel cancel-all" id="cancelAll" aria-keyshortcuts="Shift+X"
     title="두 로봇의 Nav2 목표를 취소합니다. 비상 정지가 아니에요 — 키보드(teleop) 조작은 멈추지 않아요. (Shift+X)">
     <span><span aria-hidden="true">■ </span>전체 이동 취소</span>
@@ -343,7 +345,7 @@ dialog dt { font-weight: 700; }
   <table>
     <tr><td><kbd>1</kbd> <kbd>2</kbd></td><td>로봇 선택 · 도구가 켜져 있으면 같은 도구를 그 로봇으로 옮김</td></tr>
     <tr><td><kbd>P</kbd></td><td>선택한 로봇의 초기 위치 도구 (RViz 2D Pose Estimate)</td></tr>
-    <tr><td><kbd>G</kbd></td><td>선택한 로봇의 목적지 도구 (RViz Nav2 Goal)</td></tr>
+    <tr><td><kbd>G</kbd></td><td>선택한 로봇의 목적지 도구 — 찍기만 하고, 카드의 ▶ 출발 또는 위의 ▶ 둘 다 출발로 보내요</td></tr>
     <tr><td><kbd>Esc</kbd></td><td>좌표 입력 닫기 → 끌기 취소 → 도구 풀기 (Nav2 목표는 취소하지 않아요)</td></tr>
     <tr><td><kbd>F</kbd></td><td>지도 맞춤</td></tr>
     <tr><td><kbd>X</kbd> / <kbd>Shift</kbd>+<kbd>X</kbd></td><td>선택한 로봇 / 두 로봇 이동 취소 (Nav2 목표 취소만 — 새 목표는 보내지 않고, 비상 정지도 아니에요)</td></tr>
@@ -399,6 +401,7 @@ dialog dt { font-weight: 700; }
         <span class="dom num" data-el="dom"></span></button>
       <span class="tag seltag" data-el="selTag">선택됨</span>
       <span class="c-actions">
+        <button type="button" class="btn sm fill" data-el="go" hidden><span>▶ 출발<span class="resend-xy num" data-el="goXY"></span></span></button>
         <button type="button" class="btn sm" data-el="resend" hidden><span>↻ 다시 보내기<span class="resend-xy num" data-el="resendXY"></span></span></button>
         <button type="button" class="btn sm fill" data-el="spin" hidden
           title="로봇 주변이 비어 있는지 보고 누르세요. 제자리에서 천천히 한 바퀴 돌며 위치를 찾아요. 멈추려면 ■ 이동 취소">⟳ 돌면서 찾기</button>
@@ -496,6 +499,7 @@ let summaryAt = 0, shortcutsOn = true;
 const pending = {robot1: null, robot2: null};       // 로봇별 요청 대기 {action, target} (다른 로봇은 막지 않는다)
 const stopPending = {robot1: 0, robot2: 0};
 const sentPose = {robot1: null, robot2: null};      // 방금 보낸 초기 위치 고리 {pose, until}
+const planned = {robot1: null, robot2: null};       // 찍어 두고 아직 출발하지 않은 목적지 {x, y, yaw}
 // inflightSince: 지금 진행 중인 /api/state 요청을 시작한 시각 (없으면 0). 끊김은 '실제 요청이 늦거나 실패할 때'만 판단한다
 const conn = {everOk: false, firstFailed: false, failing: false, lastOk: 0, state: 'connecting', lostEpisode: 0, inflightSince: 0};
 let pollTimer = 0, lastTick = Date.now();
@@ -568,7 +572,8 @@ for (const id of IDS) {
   el.name.onclick = () => select(id);
   el.toolPose.onclick = () => arm(id, 'initialpose');
   el.toolGoal.onclick = () => arm(id, 'goal');
-  el.cancel.onclick = () => send(id, 'stop');
+  el.cancel.onclick = () => { planned[id] = null; send(id, 'stop'); };
+  el.go.onclick = () => go(id);
   el.resend.onclick = () => resend(id);
   el.setpose.onclick = () => armSetup(id);
   el.spin.onclick = () => spin(id);
@@ -1063,6 +1068,7 @@ function drawGhosts() {
     }
     const p = pending[id];
     if (p && p.target) drawPlacement(id, p.action, p.target, '보내는 중…', 'pending');
+    else if (planned[id]) drawPlacement(id, 'goal', planned[id], '출발 대기', 'pending');
   }
   if (coordPreview && tool) {
     drawPlacement(tool.robot, tool.kind, coordPreview, '좌표 입력', 'ghost', targetWarnings(coordPreview, tool.robot).length > 0);
@@ -1180,7 +1186,7 @@ canvas.addEventListener('pointerup', e => {
   const d = drag; drag = null; d.end = p;
   const g = gesture(d);
   if (!e.shiftKey) tool = null;   // 한 번 쓰면 '보기'로 (Shift = 계속)
-  send(d.robot, d.kind, {x: g.x, y: g.y, yaw: g.yaw});
+  place(d.robot, d.kind, {x: g.x, y: g.y, yaw: g.yaw});
 });
 canvas.addEventListener('pointercancel', () => { tap = null; cancelDrag(); });
 canvas.addEventListener('pointerleave', () => { if (!drag) updateReadout(null); });
@@ -1262,7 +1268,7 @@ coordForm.addEventListener('submit', e => {
   if (targetWarnings(pose, tool.robot).includes('지도 밖')) { $('#coordErr').textContent = '지도 밖 좌표예요 — 숫자를 확인하세요'; return; }
   const t = tool, had = focusInHint();
   closeCoord(); tool = null;
-  send(t.robot, t.kind, pose);
+  place(t.robot, t.kind, pose);
   returnFocus(t, had);
 });
 $('#coordClose').onclick = () => closeCoord(true);
@@ -1270,7 +1276,8 @@ $('#hintCoord').onclick = openCoord;
 $('#hintOff').onclick = disarm;
 $('#hintSetup').onclick = () => { const id = setupRobot(); if (id) armSetup(id); };
 $('#fitBtn').onclick = fit;
-$('#cancelAll').onclick = () => IDS.forEach(id => send(id, 'stop'));
+$('#cancelAll').onclick = () => IDS.forEach(id => { planned[id] = null; send(id, 'stop'); });
+$('#goAll').onclick = () => IDS.filter(id => planned[id]).forEach(go);
 
 // 키보드: e.code로 본다 (한글 입력기가 켜져 있으면 e.key가 'ㅎ'처럼 바뀐다)
 document.addEventListener('keydown', e => {
@@ -1290,7 +1297,9 @@ document.addEventListener('keydown', e => {
   else if (code === 'KeyP' && !e.shiftKey) arm(selected, 'initialpose');
   else if (code === 'KeyG' && !e.shiftKey) arm(selected, 'goal');
   else if (code === 'KeyF' && !e.shiftKey) fit();
-  else if (code === 'KeyX') { if (e.shiftKey) IDS.forEach(id => send(id, 'stop')); else send(selected, 'stop'); }
+  else if (code === 'KeyX') {
+    for (const id of e.shiftKey ? IDS : [selected]) { planned[id] = null; send(id, 'stop'); }
+  }
   else if (code === 'Slash' && e.shiftKey) openHelp();
   else return;
   e.preventDefault();
@@ -1368,6 +1377,21 @@ async function send(id, action, pose) {
   track[id].result = {...result, at: Date.now()};
   $('#srPolite').textContent = `${id} ${result.text}`;
   render(); draw();
+}
+// 목적지는 찍어 두기만 한다(출발은 ▶ 출발 / ▶ 둘 다 출발). 초기 위치는 바로 보낸다
+function place(id, kind, pose) {
+  if (kind !== 'goal') { send(id, kind, pose); return; }
+  planned[id] = pose;
+  log(id, '⚑', `목적지 찍음 (${xy(pose)}) — 출발 대기`, 'info');
+  render(); draw();
+}
+function go(id) {
+  const pose = planned[id];
+  if (!pose) return;
+  const why = toolBlock(id, 'goal');
+  if (why) { showTemp(id, `출발 — ${why}`); render(); return; }
+  planned[id] = null;
+  send(id, 'goal', pose);
 }
 function resend(id) {
   const r = robot(id);
@@ -1449,6 +1473,7 @@ function render() {
   openIssues = issues();
   renderHeader();
   for (const id of IDS) { renderTools(id); renderCard(id); }
+  setAttr($('#goAll'), 'aria-disabled', IDS.some(id => planned[id]) ? null : 'true');
   renderCoords();
   renderHint();
   renderOverlay();
@@ -1544,6 +1569,13 @@ function renderCard(id) {
     setAttr(el.resend, 'aria-label', `${id} 목적지 다시 보내기 (${xy(n.target)})`);
     setAttr(el.resend, 'aria-disabled', why ? 'true' : null);
     setAttr(el.resend, 'title', why ? `지금은 못 보내요: ${why}` : `같은 목적지 (${xy(n.target)}, ${deg(n.target.yaw)}°)로 다시 보냅니다`);
+  }
+  show(el.go, !!planned[id]);
+  if (planned[id]) {
+    const why = toolBlock(id, 'goal');
+    setText(el.goXY, ` (${xy(planned[id])})`);
+    setAttr(el.go, 'aria-disabled', why ? 'true' : null);
+    setAttr(el.go, 'title', why ? `지금은 못 보내요: ${why}` : `찍어 둔 목적지 (${xy(planned[id])}, ${deg(planned[id].yaw)}°)로 출발합니다`);
   }
   const canSpin = v.key === 'loc-searching' || v.key === 'loc-unsure';
   show(el.spin, canSpin);
