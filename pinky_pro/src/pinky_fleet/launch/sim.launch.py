@@ -4,6 +4,7 @@
 같은 PC의 실물용 터미널(도메인 15/17)이 시뮬을 보는 경우를 막지 못한다. 도메인이 다르면 어떤 설정이든 만나지 않는다.
 """
 import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import xacro
@@ -21,6 +22,7 @@ DESCRIPTION = Path(get_package_share_directory('pinky_description'))
 GZ_SIM = Path(get_package_share_directory('pinky_gz_sim'))
 ROS_GZ_SIM = Path(get_package_share_directory('ros_gz_sim'))
 FLEET = Path(get_package_share_directory('pinky_fleet'))
+ROBOT_RGB = {'robot1': '0.1 0.45 1.0', 'robot2': '1.0 0.45 0.05'}   # 대시보드 색(파랑·주황)을 진하게. sdformat 변환에서 밝아진다
 
 
 def gazebo_urdf(robot):
@@ -30,7 +32,21 @@ def gazebo_urdf(robot):
     # 대신 Gazebo 토픽 태그만 /<robot>/ 아래로 옮겨 두 로봇이 cmd_vel·scan·tf를 공유하지 않게 한다.
     urdf = re.sub(r'<(topic|odom_topic|tf_topic)>/?', rf'<\1>/{robot}/', urdf)
     # 제조사 램프 플러그인은 초록 숨쉬기만 반복해 우리 색을 덮어쓴다. 램프는 sim_lamp가 맡는다.
-    return re.sub(r'<plugin[^>]*gz-sim-lamp-control-system.*?</plugin>', '', urdf, flags=re.S)
+    urdf = re.sub(r'<plugin[^>]*gz-sim-lamp-control-system.*?</plugin>', '', urdf, flags=re.S)
+    return paint_body(urdf, robot)
+
+
+def paint_body(urdf, robot):
+    # 몸체를 대시보드와 같은 로봇 색으로 칠한다(회색 메시는 회색 지도와 구분이 안 된다). 시뮬에서만.
+    # <gazebo reference> 확장은 고정 관절로 합쳐지는 링크에 안 먹어서 URDF visual에 <material>을 직접 넣는다
+    root = ET.fromstring(urdf)
+    for link in root.iter('link'):
+        if link.get('name') not in ('base_link', 'screen_mount'):
+            continue
+        for visual in link.iter('visual'):
+            material = ET.SubElement(visual, 'material', name=f'{robot}_body')
+            ET.SubElement(material, 'color', rgba=f'{ROBOT_RGB.get(robot, "0.5 0.5 0.5")} 1')
+    return ET.tostring(root, encoding='unicode')
 
 
 def material_color_topic(world_file):
