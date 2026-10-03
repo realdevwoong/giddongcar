@@ -112,11 +112,10 @@ def start(context):
 
 
 def generate_launch_description():
-    pinky = Path(get_package_share_directory('pinky_navigation'))
     fleet = Path(get_package_share_directory('pinky_fleet'))
     return LaunchDescription([
         DeclareLaunchArgument('map', default_value=str(fleet / 'maps' / 'good3.yaml')),
-        DeclareLaunchArgument('params_file', default_value=str(pinky / 'params/nav2_params.yaml')),
+        DeclareLaunchArgument('params_file', default_value=str(fleet / 'params/nav2_params.yaml')),   # 팀용 복사본
         DeclareLaunchArgument('robot1_domain', default_value=str(REAL_DOMAINS[0])),
         DeclareLaunchArgument('robot2_domain', default_value=str(REAL_DOMAINS[1])),
         DeclareLaunchArgument('host', default_value='127.0.0.1'),
