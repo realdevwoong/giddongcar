@@ -397,6 +397,12 @@ class Robot(Node):
             result = self.results.get(goal_id, {})
             # 목표 진행 중: Nav2가 수락·이동·취소 중이거나, 방금 보낸 목표가 아직 상태에 안 나타났다(10초까지)
             unseen = self.sent and self.sent['id'] != goal_id and time.monotonic() - self.sent['at'] < 10
+            if unseen:
+                # 취소된 예전 목표의 상태가 새 목표 상태보다 늦게 도착할 수 있다.
+                # 방금 수락된 목표를 기준으로 보여 줘야 재개 직후 '취소됨'으로 깜빡이지 않는다.
+                goal_id = self.sent['id']
+                state, label = 'accepted', NAV_STATES[1][1]
+                result = self.results.get(goal_id, {})
             nav = dict(id=goal_id and goal_id[:8], state=state, label=label,
                        active=bool(state in ('accepted', 'executing', 'canceling') or unseen),
                        target=self.targets.get(goal_id), feedback=self.goal['feedback'],
@@ -548,6 +554,13 @@ class Fleet:
     def state(self):
         map_id, _ = self.map()
         states = [robot.snapshot() for robot in self.robots.values()]
+        if self.yielding['action'] != 'go' and self.yielding['target']:
+            # Nav2 목표 취소는 양보를 위해 자동으로 한 것이므로 사용자 취소처럼 보이지 않게 한다.
+            for state in states:
+                if state['id'] == FOLLOWER:
+                    state['nav'].update(state='yielding', label='양보 대기', active=False,
+                                        target=self.yielding['target'])
+                    state['status'] = '양보 대기'
         for state in states:
             state['map_matches'] = bool(map_id and state['map_id'] == map_id)
         return dict(map_id=map_id, robots=states, traffic=self.traffic_state())

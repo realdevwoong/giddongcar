@@ -463,6 +463,7 @@ const NAV = {
   succeeded: {ko: '도착',      en: 'SUCCEEDED', glyph: '✓',  tone: 'green',    short: '도착'},
   canceled:  {ko: '취소됨',    en: 'CANCELED',  glyph: '■',  tone: 'greyfill', short: '취소됨'},
   aborted:   {ko: '이동 실패', en: 'ABORTED',   glyph: WARN, tone: 'red',      short: '실패'},
+  yielding:  {ko: '양보 대기', en: 'YIELDING',  glyph: 'Ⅱ', tone: 'amber-o', short: '양보 대기'},
 };
 // 전역 위치 찾기 단계 (/api/state robots[].localize.phase). found·manual·known은 위치가 있으니 NAV 상태로 보인다
 const LOC = {
@@ -635,6 +636,7 @@ function view(id) {
     case 'accepted': detail = where; break;
     case 'canceling': detail = n.target ? `${where} · 취소 처리 중` : where; break;
     case 'canceled': detail = n.target ? `${where} · 취소됨` : where; break;
+    case 'yielding': detail = `${where} · robot1이 지나가면 다시 출발해요`; break;
     case 'succeeded':
       detail = (f ? `${secs(f.elapsed)} 걸림${rec}` : '도착했어요') + (t.arrivedAt[n.id] ? ` · ${t.arrivedAt[n.id]} 도착` : '');
       break;
@@ -1484,13 +1486,20 @@ function render() {
   renderOverlay();
   renderSummary();
 }
+let trafficNote = '', trafficNoteChangedAt = 0;
 function renderTraffic() {
   const el = $('#trafficStatus'), y = traffic && traffic.yielding, messages = [];
   if (y && y.action !== 'go') {
     messages.push(`${y.robot || 'robot2'} 양보 중${y.leader ? ` (${y.leader} 먼저)` : ''}`);
     if (y.reason) messages.push(y.reason);
   }
-  if (traffic && traffic.note) messages.push(traffic.note);
+  const note = traffic && traffic.note || '';
+  if (note !== trafficNote) {
+    trafficNote = note;
+    trafficNoteChangedAt = Date.now();
+  }
+  // 마지막 알림을 서버가 보관해도 도구 줄을 계속 차지하지 않도록 잠시만 표시한다.
+  if (note && Date.now() - trafficNoteChangedAt < 5000) messages.push(note);
   const text = [...new Set(messages)].join(' · ');
   setText(el, text);
   show(el, !!text);

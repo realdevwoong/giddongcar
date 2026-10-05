@@ -434,6 +434,9 @@ class TrafficFleetTests(unittest.TestCase):
         self.fleet.traffic_tick()
         self.r2.command.assert_called_once_with('stop', {})                 # Nav2 목표를 멈췄다
         self.assertEqual(self.yielding()['action'], 'stop')
+        robot2_state = next(r for r in self.fleet.state()['robots'] if r['id'] == 'robot2')
+        self.assertEqual(robot2_state['nav']['state'], 'yielding')           # 자동 취소를 사용자 취소로 보이지 않는다
+        self.assertEqual(robot2_state['nav']['label'], '양보 대기')
         self.r2.active = False                                              # 취소됨
         self.fleet.traffic_tick()
         self.assertEqual(self.r2.command.call_count, 1)                     # robot1이 아직 지나는 중

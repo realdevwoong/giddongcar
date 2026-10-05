@@ -125,6 +125,9 @@ Nav2 설정은 제조사 원본(`pinky_navigation/params/nav2_params.yaml`)을 �
 - [ ] (7) robot1 비켜 주기: 원래 자리로 돌아갈지 결정
 - [ ] (5) robot2 양보 자리를 robot1 위험 구역 밖으로 고르기
 - [x] 화면에 양보 중·재시도 상태 표시
+- [x] 양보 대기와 사용자 취소를 구분해 표시하고 재개 알림은 5초 뒤 숨김
 - [x] `sim.launch.py` Fast DDS·LOCALHOST 격리 확인 (`/clock`, `/odom`, `/scan`) (2)
 - [ ] 실물 로봇에서 같은 값 확인 (특히 Nav2 팀 설정)
 - [x] 커밋 (목적별로 나눠서)
+
+양보 동작은 사용자 관찰상 동작하는 듯하다. 다만 robot1의 안전 대기 위치, robot2 대기 위치의 위험 구역 간격, 실물 Nav2 값은 별도로 검증해야 한다.
