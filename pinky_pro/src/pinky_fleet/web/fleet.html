@@ -1732,10 +1732,11 @@ function renderCard(id) {
       (inference.state === 'error' || inferStale ? ' stale' : ''));
     setAttr(el.camStatus, 'title', camera.error || inference.error || el.camStatus.textContent);
     const control = camera.control || {};
-    const controlStates = {unconfigured: '카메라 IP 설정 필요', off: '카메라 꺼짐', starting: '카메라 시작 명령 전송 중',
-      on: control.running ? '스트리밍 중' : '카메라 켜짐 · 스트림 대기',
-      stopping: '카메라 중지 명령 전송 중', error: `카메라 제어 오류: ${control.error || '상태 확인 필요'}`};
-    setText(el.camControlStatus, controlStates[control.state] || '카메라 상태 확인 중');
+    const controlStates = {unconfigured: '카메라 IP 설정 필요', off: '카메라 꺼짐', starting: 'BLE 카메라 시작 응답 대기 중',
+      on: control.running ? 'BLE 시작 응답 완료 · 스트림 실행 중' : 'BLE 시작 응답 완료 · 스트림 실행 대기',
+      stopping: 'BLE 카메라 중지 응답 대기 중', error: `카메라 제어 오류: ${control.error || '상태 확인 필요'}`};
+    const controlUrl = control.stream_url ? ` · 로봇 주소 ${control.stream_url}` : '';
+    setText(el.camControlStatus, (controlStates[control.state] || '카메라 상태 확인 중') + controlUrl);
     setAttr(el.camControlStatus, 'title', control.error || control.stream_url || controlStates[control.state] || null);
     const busy = cameraPending[id] || control.state === 'starting' || control.state === 'stopping';
     el.camStart.disabled = !control.configured || busy || control.enabled;
