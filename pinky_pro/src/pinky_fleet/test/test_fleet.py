@@ -17,7 +17,7 @@ from action_msgs.srv import CancelGoal
 from geometry_msgs.msg import TransformStamped
 from nav2_msgs.action import NavigateToPose
 from launch import LaunchContext
-from launch.actions import ExecuteProcess, SetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, SetEnvironmentVariable
 from launch.utilities import perform_substitutions
 from rclpy.time import Time
 
@@ -603,6 +603,16 @@ class SimLaunchTests(unittest.TestCase):
         self.assertEqual(module.material_color_topic(worlds / 'pinky_factory.world'),
                          '/world/pinky_factory/material_color')
 
+    def test_nav2_params_file_reaches_the_fleet_launch(self):
+        # 실물과 같은 팀용 복사본이 기본이고, params_file:=로 바꾸면 Nav2 쪽 launch까지 넘어간다
+        entities = self.load().generate_launch_description().entities
+        declared = {e.name: e for e in entities if isinstance(e, DeclareLaunchArgument)}
+        self.assertTrue(perform_substitutions(LaunchContext(), declared['params_file'].default_value)
+                        .endswith('pinky_fleet/params/nav2_params.yaml'))
+        fleet = next(e for e in entities if isinstance(e, IncludeLaunchDescription)
+                     and 'traffic_zones' in dict(e.launch_arguments))
+        self.assertIn('params_file', dict(fleet.launch_arguments))
+
 
 LAUNCH_FILE = Path(__file__).resolve().parents[1] / 'launch' / 'multi_robot.launch.py'
 ISOLATED = {'ROS_AUTOMATIC_DISCOVERY_RANGE': 'LOCALHOST', 'ROS_STATIC_PEERS': '',
@@ -635,6 +645,11 @@ class LaunchTests(unittest.TestCase):
         domains = [dict((perform_substitutions(context, k), perform_substitutions(context, v))
                         for k, v in p.additional_env or []).get('ROS_DOMAIN_ID') for p in processes]
         return cmds, domains
+
+    def test_traffic_zones_off_turns_traffic_control_off(self):
+        # ros2 launch는 빈 값(traffic_zones:=)을 받지 않아서 끄는 값은 off다
+        cmds, _ = self.start('false', REAL, env={}, traffic_zones='off')
+        self.assertNotIn('--traffic-zones', cmds[2])
 
     def test_traffic_zones_reach_the_dashboard(self):
         cmds, _ = self.start('false', ('15', '17'), env={}, traffic_zones='/zones/traffic_good3.yaml')

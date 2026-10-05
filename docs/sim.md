@@ -34,6 +34,7 @@ ros2 launch pinky_fleet sim.launch.py
 | `headless_rendering:=true` | false | 디스플레이 없는 PC에서 라이다·카메라 렌더링 |
 | `robot2_x:= robot2_y:= robot2_yaw:=` | 2.0, 0.5, 0 | 생성 위치 (robot1은 0.5, 0.5, 0) |
 | `world:= map:=` | good_map / good3 | 다른 월드를 쓰면 그 월드 지도도 같이 |
+| `params_file:=` | `pinky_fleet/params/nav2_params.yaml` | Nav2 설정(실물과 같은 팀 복사본). 값을 시험할 때는 복사해서 넘기고, 정한 값은 복사본에 넣는다 |
 
 ## 월드
 
