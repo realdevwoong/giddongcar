@@ -448,7 +448,7 @@ dialog dt { font-weight: 700; }
         <i class="sw" data-el="lampSw" aria-hidden="true"></i><span class="lamp-t" data-el="lampText"></span><span data-el="lampMark"></span>
         <button type="button" class="lamp-fail" data-el="lampFail" hidden aria-label="램프 응답 없음 — 도움말 열기">✕ 램프 응답 없음</button></span>
     </div>
-    <!-- 자리: 카메라 미리보기(MJPEG) — 주소는 API에서 받는다. 그 전에는 아무것도 그리지 않는다 -->
+    <!-- 자리: 카메라 미리보기(카메라 프레임) — 주소는 API에서 받는다. 그 전에는 아무것도 그리지 않는다 -->
     <div class="cam" data-el="cam" hidden>
       <img data-el="camImage" alt="로봇 카메라 영상" />
       <span class="cam-status" data-el="camStatus" role="status">카메라 연결 대기</span>
@@ -1688,9 +1688,9 @@ function renderCard(id) {
   if (camera && camera.enabled) {
     const src = camera.url || `/camera/${id}.mjpg`;
     if (el.camImage.dataset.src !== src) { el.camImage.dataset.src = src; el.camImage.src = src; }
-    const states = {connecting: 'MJPEG 연결 시도 중', waiting: 'HTTP 연결됨 · 첫 JPEG 프레임 대기 중',
+    const states = {connecting: '카메라 HTTP 연결 시도 중', waiting: 'HTTP 연결됨 · 첫 JPEG 프레임 대기 중',
       online: '영상 수신 중', stale: '영상 수신 지연',
-      offline: 'MJPEG 연결 실패 · 재연결 중', disabled: '카메라 사용 안 함'};
+      offline: '카메라 연결 실패 · 재연결 중', disabled: '카메라 사용 안 함'};
     const age = Number.isFinite(camera.age_s) ? ` · 마지막 영상 ${camera.age_s.toFixed(1)}초 전` : '';
     const streamError = camera.error ? ` · ${camera.error}` : '';
     const sourceAddress = camera.frames === 0 && camera.source_url ? ` · 주소 ${camera.source_url}` : '';

@@ -76,6 +76,51 @@ class CameraStreamTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
+    def test_reads_pinky_html_viewer_snapshot_endpoint(self):
+        frame = b'\xff\xd8camera-snapshot\xff\xd9'
+        requested = []
+        page = b"<!doctype html><img id=v><script>img.src='/snapshot?t='+Date.now();</script>"
+
+        class SnapshotHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                requested.append(self.path)
+                if self.path == '/':
+                    body, content_type = page, 'text/html; charset=utf-8'
+                elif self.path.startswith('/snapshot?t='):
+                    body, content_type = frame, 'image/jpeg'
+                else:
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header('Content-Type', content_type)
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args):
+                pass
+
+        server = ThreadingHTTPServer(('127.0.0.1', 0), SnapshotHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        camera = MJPEGCamera('127.0.0.1', server.server_port, 'snapshot-test')
+        try:
+            camera.start()
+            deadline = time.monotonic() + 2
+            received, sequence = None, 0
+            while time.monotonic() < deadline:
+                received, sequence = camera.latest()
+                if sequence:
+                    break
+                time.sleep(0.01)
+            self.assertEqual(received, frame)
+            self.assertGreater(sequence, 0)
+            self.assertTrue(any(path.startswith('/snapshot?t=') for path in requested))
+            self.assertEqual(camera.status()['state'], 'online')
+        finally:
+            camera.close()
+            server.shutdown()
+            server.server_close()
+
     def test_extracts_multiple_jpegs_and_keeps_partial_marker(self):
         first, second = b'\xff\xd8one\xff\xd9', b'\xff\xd8two\xff\xd9'
         frames, remaining = MJPEGCamera._take_frames(b'noise' + first + second + b'\xff')

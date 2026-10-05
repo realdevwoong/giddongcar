@@ -1,5 +1,6 @@
-"""Receive Pinky Pro's HTTP MJPEG stream and keep only its newest frame."""
+"""Receive Pinky Pro camera frames from MJPEG or its HTML viewer snapshot endpoint."""
 from http.client import HTTPConnection, HTTPException
+import re
 import threading
 import time
 from collections import deque
@@ -184,6 +185,46 @@ class MJPEGCamera:
             frames.append(buffer[start:end + 2])
             buffer = buffer[end + 2:]
 
+    @staticmethod
+    def _snapshot_path(page):
+        # Pinky camera viewer sets img.src='/snapshot?t='+Date.now() on every frame.
+        match = re.search(r"img\.src\s*=\s*['\"]([^'\"]*snapshot[^'\"]*)['\"]", page, re.IGNORECASE)
+        if not match:
+            return None
+        return match.group(1).split('?', 1)[0] or '/snapshot'
+
+    def _read_snapshots(self, host, port, path):
+        while not self._stop.is_set():
+            connection = HTTPConnection(host, port, timeout=4)
+            with self._lock:
+                self._connection = connection
+            try:
+                request_path = f'{path}?t={int(time.time() * 1000)}'
+                connection.request('GET', request_path, headers={
+                    'Host': host,
+                    'Accept': 'image/jpeg, */*',
+                    'Cache-Control': 'no-cache',
+                    'Connection': 'close',
+                })
+                response = connection.getresponse()
+                if response.status != 200:
+                    raise ConnectionError(f'카메라 snapshot HTTP 응답: {response.status} {response.reason}')
+                content_type = response.getheader('Content-Type', '').lower()
+                if content_type and 'image/jpeg' not in content_type and 'application/octet-stream' not in content_type:
+                    raise ValueError(f'snapshot 응답이 JPEG가 아닙니다: {content_type[:80]}')
+                frame = response.read(self.MAX_BUFFER + 1)
+                if len(frame) > self.MAX_BUFFER:
+                    raise ValueError('카메라 JPEG 프레임 크기가 제한을 넘었습니다')
+                if not frame.startswith(b'\xff\xd8') or not frame.endswith(b'\xff\xd9'):
+                    raise ValueError('snapshot 응답에 올바른 JPEG 프레임이 없습니다')
+                self._publish(frame)
+            finally:
+                connection.close()
+                with self._lock:
+                    if self._connection is connection:
+                        self._connection = None
+            self._stop.wait(1.0 / 15.0)
+
     def _run(self):
         while not self._stop.is_set():
             connection = None
@@ -203,7 +244,14 @@ class MJPEGCamera:
                     raise ConnectionError(f'카메라 HTTP 응답: {response.status} {response.reason}')
                 content_type = response.getheader('Content-Type', '').lower()
                 if content_type.startswith('text/html'):
-                    raise ValueError(f'{host}:{port}{path}에서 HTML 응답을 받았습니다. MJPEG 주소/포트를 확인하세요')
+                    page = response.read1(65536).decode('utf-8', errors='replace')
+                    snapshot_path = self._snapshot_path(page)
+                    if not snapshot_path:
+                        raise ValueError(f'{host}:{port}{path}에서 카메라 snapshot 경로가 없는 HTML을 받았습니다')
+                    self._content_type = 'HTML viewer + JPEG snapshot polling'
+                    self._set_connection(True)
+                    self._read_snapshots(host, port, snapshot_path)
+                    continue
                 if content_type and not any(kind in content_type for kind in
                                             ('multipart/x-mixed-replace', 'multipart/mixed', 'image/jpeg')):
                     raise ValueError(f'카메라 응답 형식이 MJPEG가 아닙니다: {content_type[:80]}')

@@ -90,7 +90,7 @@ PYTHONPATH="$PWD/.venv/lib/python3.12/site-packages${PYTHONPATH:+:$PYTHONPATH}" 
 
 실물 관제는 `scripts/start_fleet.sh`가 이 venv를 ROS Python import 경로에 자동으로 추가합니다. 직접 `ros2 launch`할 때는 위의 `PYTHONPATH` 설정을 같은 터미널에서 먼저 실행해야 합니다. `.pt` 가중치는 대용량 모델 파일이므로 Git에는 넣지 않습니다. 고정 경로에 가중치가 없으면 Ultralytics가 `YOLO('yolo11n.pt')` 로딩 중 공식 배포처에서 자동으로 내려받습니다. 첫 다운로드에는 인터넷 연결이 필요합니다. 다운로드나 모델 초기화에 실패해도 카메라 원본 영상과 Nav2 실행은 계속되며 YOLO 상태에 오류가 표시됩니다.
 
-스트림을 시작한 뒤 영상이 안 나오면 로봇에서 `sudo ss -ltnp | grep ':5000'`으로 서버가 열렸는지 확인합니다. 이전에 확인한 로봇의 Jupyter 포트는 `8888`이었지만, 현재 로봇의 `:5000/`이 HTML을 반환한다면 그 주소는 MJPEG가 아닙니다. 대시보드는 오류와 실제 접속 주소를 표시하며 BLE 응답의 스트림 URL을 우선 반영합니다. 영상 표시는 로봇 구동 명령을 보내지 않습니다.
+스트림을 시작한 뒤 영상이 안 나오면 로봇에서 `sudo ss -ltnp | grep ':5000'`으로 서버가 열렸는지 확인합니다. 이전에 확인한 로봇의 Jupyter 포트는 `8888`이었지만, `:5000/`이 `<img src="/snapshot?...">`가 있는 Pinky 카메라 뷰어 HTML을 반환하는 것은 정상이며, 대시보드는 페이지의 `/snapshot` JPEG 요청을 반복해 영상을 받습니다. 다른 HTML이면 스트림 주소가 잘못된 것입니다. Jupyter는 이전 확인에서 `8888`을 사용했습니다. 대시보드는 실제 접속 주소와 오류를 표시하고 BLE 응답 URL을 우선 사용합니다. 영상 표시는 로봇 구동 명령을 보내지 않습니다.
 
 ## 실행 (Gazebo, 로봇 2대)
 
