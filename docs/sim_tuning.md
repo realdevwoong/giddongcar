@@ -127,4 +127,4 @@ Nav2 설정은 제조사 원본(`pinky_navigation/params/nav2_params.yaml`)을 �
 - [x] 화면에 양보 중·재시도 상태 표시
 - [x] `sim.launch.py` Fast DDS·LOCALHOST 격리 확인 (`/clock`, `/odom`, `/scan`) (2)
 - [ ] 실물 로봇에서 같은 값 확인 (특히 Nav2 팀 설정)
-- [ ] 커밋 (목적별로 나눠서)
+- [x] 커밋 (목적별로 나눠서)
