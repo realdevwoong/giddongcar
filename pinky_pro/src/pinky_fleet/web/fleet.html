@@ -155,6 +155,7 @@ button.cchip[aria-pressed="true"] { border-color: var(--rc); box-shadow: inset 0
 .cam-control { display: flex; align-items: center; gap: 6px;
   padding: 5px 8px; flex-wrap: wrap; border-top: 1px solid var(--line); background: var(--card); }
 .cam-control-status { flex: 1 1 auto; min-width: 10em; color: var(--muted); font-size: 12px; }
+.cam-observe[aria-pressed="true"] { border-color: #f2b441; color: #f2b441; }
 .c-head { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; min-width: 0; min-height: 28px; }
 .c-name { display: inline-flex; align-items: center; gap: 7px; flex: 0 1 auto; min-width: 0; margin-left: -4px; padding: 0 4px;
   border: 0; border-radius: 6px; background: none; font-size: 16px; font-weight: 700; white-space: nowrap; overflow: hidden; }
@@ -454,6 +455,7 @@ dialog dt { font-weight: 700; }
         <span class="cam-control-status" data-el="camControlStatus" role="status"></span>
         <button type="button" class="btn sm" data-el="camStart">카메라 시작</button>
         <button type="button" class="btn sm cancel" data-el="camStop">중지</button>
+        <button type="button" class="btn sm cam-observe" data-el="camObserve" aria-pressed="false">인식 관찰 시작</button>
       </div>
     </div>
   </section>
@@ -530,6 +532,7 @@ let summaryAt = 0, shortcutsOn = true;
 const pending = {robot1: null, robot2: null};       // 로봇별 요청 대기 {action, target} (다른 로봇은 막지 않는다)
 const stopPending = {robot1: 0, robot2: 0};
 const cameraPending = {robot1: false, robot2: false};
+const cameraObservation = {robot1: {active: false, sequence: 0, signature: null}, robot2: {active: false, sequence: 0, signature: null}};
 const sentPose = {robot1: null, robot2: null};      // 방금 보낸 초기 위치 고리 {pose, until}
 const planned = {robot1: null, robot2: null};       // 찍어 두고 아직 출발하지 않은 목적지 {x, y, yaw}
 // inflightSince: 지금 진행 중인 /api/state 요청을 시작한 시각 (없으면 0). 끊김은 '실제 요청이 늦거나 실패할 때'만 판단한다
@@ -607,6 +610,17 @@ for (const id of IDS) {
   el.cancel.onclick = () => { planned[id] = null; send(id, 'stop'); };
   el.camStart.onclick = () => cameraControl(id, 'camera_start');
   el.camStop.onclick = () => cameraControl(id, 'camera_stop');
+  el.camObserve.onclick = () => {
+    const state = cameraObservation[id];
+    state.active = !state.active;
+    state.sequence = 0;
+    state.signature = null;
+    el.camObserve.setAttribute('aria-pressed', String(state.active));
+    el.camObserve.textContent = state.active ? '관찰 기록 중지' : '인식 관찰 시작';
+    log(id, state.active ? '◉' : 'Ⅱ', state.active
+      ? '인식 관찰 기록 시작 — 주행 명령에는 연결되지 않습니다.'
+      : '인식 관찰 기록을 마쳤습니다.', 'info');
+  };
   el.go.onclick = () => go(id);
   el.resend.onclick = () => resend(id);
   el.setpose.onclick = () => armSetup(id);
@@ -1677,6 +1691,24 @@ function renderCard(id) {
     const age = Number.isFinite(camera.age_s) ? ` · 마지막 영상 ${camera.age_s.toFixed(1)}초 전` : '';
     const inference = camera.inference || {};
     const found = Array.isArray(inference.detections) ? inference.detections : [];
+    const observe = cameraObservation[id];
+    const sequence = Number.isFinite(inference.sequence) ? inference.sequence : 0;
+    if (observe.active && inference.state === 'online' && inference.age_s <= 2.5 && sequence > observe.sequence) {
+      observe.sequence = sequence;
+      const counts = new Map();
+      for (const item of found) if (item && typeof item.label === 'string')
+        counts.set(item.label, (counts.get(item.label) || 0) + 1);
+      const signature = [...counts].sort(([a], [b]) => a.localeCompare(b)).map(([name, count]) => `${name}:${count}`).join('|') || 'none';
+      if (signature !== observe.signature) {
+        observe.signature = signature;
+        const description = signature === 'none' ? '탐지된 객체 없음'
+          : [...counts].map(([name, count]) => `${name}${count > 1 ? ` ×${count}` : ''}`).join(', ');
+        log(id, '◉', `인식 변화: ${description} (YOLO 관찰 기록)`, 'info');
+      }
+    }
+    el.camObserve.setAttribute('aria-pressed', String(observe.active));
+    el.camObserve.textContent = observe.active ? '관찰 기록 중지' : '인식 관찰 시작';
+    el.camObserve.disabled = !camera.enabled || inference.state !== 'online';
     const best = new Map();
     for (const item of found) {
       if (item && typeof item.label === 'string' && Number.isFinite(item.confidence))

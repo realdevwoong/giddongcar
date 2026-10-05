@@ -25,7 +25,7 @@ class MJPEGCamera:
         self._last_frame_at = None
         self._error = ''
         self._thread = None
-        self._inference = dict(state='disabled', model=None, latency_ms=None, labels=[])
+        self._inference = dict(state='disabled', model=None, latency_ms=None, labels=[], sequence=0)
         self._inference_times = deque(maxlen=20)
         self._last_inference_at = None
 
@@ -66,7 +66,7 @@ class MJPEGCamera:
                               if frame_sequence == sequence), now)
             labels = sorted({item['label'] for item in detections})
             self._inference = dict(state='online', model=self._inference['model'],
-                                   latency_ms=round(latency_ms, 1), labels=labels[:8],
+                                   latency_ms=round(latency_ms, 1), labels=labels[:8], sequence=sequence,
                                    detections=detections[:20], source_age_s=round(max(0.0, now - source_at), 2),
                                    fps=self._inference_fps())
             self._lock.notify_all()
