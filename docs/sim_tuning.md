@@ -18,6 +18,7 @@ Gazebo(`sim.launch.py`, good3 지도)에서 로봇 2대를 같이 움직이며 �
 | robot2가 보는 앞 경로 `yield_lookahead` | 〃 | (새로) 1.0 | **0.5 m** | 〃 |
 | robot1이 보는 앞 경로 `yield_leader_ahead` | 〃 | (없음: 남은 경로 전체) | **0.8 m** | 멀리서부터 비키지 않게 |
 | 양보 풀기 여유 `yield_release` | 〃 | — | 0.10 m | 멈춤↔출발 떨림 방지 |
+| 구석 도착 허용오차 `xy_goal_tolerance` | `pinky_fleet/params/nav2_params.yaml` | 0.03 | **0.08 m** | 구석에서 제자리 회전하다 벽에 걸림 (시뮬 검증 필요) |
 | 한 번 물러나는 거리·속도·횟수 | `fleet_dashboard.py` `BACK_STEP/SPEED/LIMIT` | — | 0.15 m · 0.08 m/s · 3번 | robot2 양보 |
 | 실패 시 다시 보내기 | `fleet_dashboard.py` `RETRY_CODES/LIMIT` | — | 코드 0·104·105·106, 3번 | 막혀서 실패해도 다시 하면 지나감 |
 | Gazebo 벽 / 바닥 색 | `pinky_fleet/worlds/good_map.world` | 회색 0.6 / 0.8 | 남색 (0.15 0.22 0.35) / 흰색 0.95 | 화면에서 구분이 안 됨 |
@@ -112,13 +113,13 @@ Nav2 설정은 제조사 원본(`pinky_navigation/params/nav2_params.yaml`)을 �
 - **원인**: 도착 판정이 **위치 3 cm + 방향 14°**(`general_goal_checker` `xy_goal_tolerance: 0.03`, `yaw_goal_tolerance: 0.25`)로 엄격하다.
   도착해서 목표 방향으로 제자리 회전을 하는데 몸체 뒤가 0.08 m 튀어나와(회전 반경 약 0.094 m) 구석 두 벽에 걸린다.
 - **해 봤다가 되돌린 것**: "벽에서 15 cm 안쪽 목적지 거절"을 넣었더니 구석으로 **아예 보낼 수 없게** 되어 되돌렸다. 구석도 갈 수 있어야 한다.
-- **다음 후보**: `xy_goal_tolerance` 0.03 → 0.08 m (구석을 막지 않고 도착 근처에서 맴도는 것만 줄인다). 아직 적용 안 함.
+- **조정**: `xy_goal_tolerance`를 0.03 → 0.08 m로 바꿨다. 구석에 목적지를 둘 수 있는 설정이지만, 시뮬에서 효과를 아직 검증하지 않았다.
 
 ---
 
 ## 다음 할 일
 
-- [ ] (8) 구석 도착: `xy_goal_tolerance` 조정 시험
+- [ ] (8) 구석 도착: `xy_goal_tolerance: 0.08` 시뮬 조정 시험
 - [ ] (7) robot1 비켜 주기: 원래 자리로 돌아갈지 결정
 - [ ] (5) robot2 양보 자리를 robot1 위험 구역 밖으로 고르기
 - [x] 화면에 양보 중·재시도 상태 표시

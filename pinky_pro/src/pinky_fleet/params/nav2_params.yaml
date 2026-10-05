@@ -162,7 +162,7 @@ controller_server:
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
       stateful: true
-      xy_goal_tolerance: 0.03 #0.25 # [m] 목표 지점 반경 0.25m 안에 들어오면 도착 인정
+      xy_goal_tolerance: 0.08 # [m] 구석에서 회전하다 벽에 걸리지 않도록 목표 위치 허용 범위 조정(시뮬 검증 필요)
       yaw_goal_tolerance: 0.25 # [rad] 목표 각도 오차 약 14도 이내면 올바르게 본 것으로 인정
 
     # ==========================================================
