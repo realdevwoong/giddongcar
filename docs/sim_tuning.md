@@ -121,7 +121,7 @@ Nav2 설정은 제조사 원본(`pinky_navigation/params/nav2_params.yaml`)을 �
 - [ ] (8) 구석 도착: `xy_goal_tolerance` 조정 시험
 - [ ] (7) robot1 비켜 주기: 원래 자리로 돌아갈지 결정
 - [ ] (5) robot2 양보 자리를 robot1 위험 구역 밖으로 고르기
-- [ ] 화면에 "양보 중 (robot1 대기)", "다시 보냄 (1/3)" 표시
+- [x] 화면에 양보 중·재시도 상태 표시
 - [ ] `sim.launch.py`가 스스로 Fast DDS를 쓰게 하기 (2)
 - [ ] 실물 로봇에서 같은 값 확인 (특히 Nav2 팀 설정)
 - [ ] 커밋 (목적별로 나눠서)

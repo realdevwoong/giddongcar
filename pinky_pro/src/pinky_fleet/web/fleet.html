@@ -73,6 +73,8 @@ main { flex: 1; min-width: 0; display: grid; gap: 8px; padding: 8px var(--gut) v
 
 /* 도구줄: RViz처럼 지도 바로 위. 로봇마다 [상태 칩][초기 위치][목적지] */
 .tools { grid-area: tools; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; min-height: var(--tools); }
+.traffic-status { flex: 1 0 100%; padding: 6px 10px; border: 1px solid #526b8b; border-radius: 8px;
+  background: #1b2b40; color: var(--text); font-size: 13px; }
 .tgroup { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .tsep { width: 1px; height: 28px; margin: 0 4px; background: var(--line); }
 .rchip { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px 0 8px; border-radius: 8px;
@@ -289,6 +291,7 @@ dialog dt { font-weight: 700; }
       <button type="button" class="btn" id="fitBtn" title="지도 맞춤 (F)" aria-keyshortcuts="F" aria-label="지도 맞춤">
         <svg aria-hidden="true"><use href="#i-fit"/></svg><span>맞춤</span></button>
     </div>
+    <div class="traffic-status" id="trafficStatus" role="status" aria-live="polite" hidden></div>
   </div>
 
   <section class="mapbox" id="mapBox" aria-label="지도">
@@ -485,6 +488,7 @@ const WHY = {server: '서버 연결 끊김', map: '지도 수신 대기', mismat
 
 // ─────────────── 상태 ───────────────
 let robots = [];                                    // 마지막 /api/state 의 robots
+let traffic = null;                                 // 교통 정리·재시도 상태
 let map = null, mapId = null, bitmap = null, known = null;   // known: 알려진 칸 범위(칸 단위)
 const mapLoad = {busy: false, fails: 0, retryAt: 0, error: ''};   // /api/map 받기 (연결 상태와 따로)
 let scale = 1, ox = 0, oy = 0, cssW = 0, cssH = 0, dpr = 1;  // 지도 → 화면(CSS px)
@@ -1472,12 +1476,24 @@ function render() {
   autoDisarm();
   openIssues = issues();
   renderHeader();
+  renderTraffic();
   for (const id of IDS) { renderTools(id); renderCard(id); }
   setAttr($('#goAll'), 'aria-disabled', IDS.some(id => planned[id]) ? null : 'true');
   renderCoords();
   renderHint();
   renderOverlay();
   renderSummary();
+}
+function renderTraffic() {
+  const el = $('#trafficStatus'), y = traffic && traffic.yielding, messages = [];
+  if (y && y.action !== 'go') {
+    messages.push(`${y.robot || 'robot2'} 양보 중${y.leader ? ` (${y.leader} 먼저)` : ''}`);
+    if (y.reason) messages.push(y.reason);
+  }
+  if (traffic && traffic.note) messages.push(traffic.note);
+  const text = [...new Set(messages)].join(' · ');
+  setText(el, text);
+  show(el, !!text);
 }
 function renderHeader() {
   const c = conn.state, age = (Date.now() - conn.lastOk) / 1000, el = $('#conn');
@@ -1709,6 +1725,7 @@ async function poll() {
     conn.downFor = (Date.now() - conn.lastOk) / 1000;
     conn.everOk = true; conn.failing = false; conn.lastOk = Date.now();
     robots = data.robots;
+    traffic = data.traffic || null;
     guard(updateTracks);
     if (data.map_id && data.map_id !== mapId) loadMap();   // 기다리지 않는다: 지도가 오는 동안에도 상태는 계속 받는다
   }
