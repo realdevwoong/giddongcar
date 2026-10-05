@@ -20,6 +20,7 @@ class MJPEGCamera:
         self.name = name
         self._lock = threading.Condition()
         self._stop = threading.Event()
+        self._active = threading.Event()
         self._frame = None
         self._overlay = None
         self._sequence = 0
@@ -71,6 +72,25 @@ class MJPEGCamera:
             self._thread = threading.Thread(target=self._run, name=f'{self.name}-mjpeg', daemon=True)
             self._thread.start()
 
+    @property
+    def active(self):
+        return self._active.is_set()
+
+    def activate(self):
+        if self.enabled:
+            self._active.set()
+            with self._lock:
+                self._error = ''
+                self._lock.notify_all()
+
+    def deactivate(self):
+        self._active.clear()
+        with self._lock:
+            connection = self._connection
+            self._lock.notify_all()
+        if connection:
+            connection.close()
+
     def close(self):
         self._stop.set()
         with self._lock:
@@ -120,7 +140,7 @@ class MJPEGCamera:
     def wait_next(self, sequence, timeout=1.0):
         deadline = time.monotonic() + timeout
         with self._lock:
-            while not self._stop.is_set() and self._display_sequence <= sequence:
+            while not self._stop.is_set() and self._active.is_set() and self._display_sequence <= sequence:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     break
@@ -135,6 +155,8 @@ class MJPEGCamera:
             age = None if self._last_frame_at is None else max(0.0, now - self._last_frame_at)
             if not self.enabled:
                 state = 'disabled'
+            elif not self._active.is_set():
+                state = 'idle'
             elif self._sequence and age is not None and age <= 2.5:
                 state = 'online'
             elif self._connected and self._sequence == 0:
@@ -148,11 +170,11 @@ class MJPEGCamera:
             inference = {**self._inference, 'fps': self._inference_fps(),
                          'age_s': round(max(0.0, now - self._last_inference_at), 1)
                          if self._last_inference_at is not None else None}
-            return dict(enabled=self.enabled, state=state, frames=self._sequence,
+            return dict(enabled=self.enabled, active=self._active.is_set(), state=state, frames=self._sequence,
                         age_s=round(age, 1) if age is not None else None,
                         source_url=f'http://{self.host}:{self.port}{self.path}',
                         content_type=self._content_type, error=self._error, inference=inference,
-                        url=f'/camera/{self.name}.mjpg' if self.enabled else None)
+                        url=f'/camera/{self.name}.jpg' if self.enabled else None)
 
     def _set_connection(self, connected, error=None):
         with self._lock:
@@ -194,7 +216,7 @@ class MJPEGCamera:
         return match.group(1).split('?', 1)[0] or '/snapshot'
 
     def _read_snapshots(self, host, port, path):
-        while not self._stop.is_set():
+        while not self._stop.is_set() and self._active.is_set():
             connection = HTTPConnection(host, port, timeout=4)
             with self._lock:
                 self._connection = connection
@@ -227,6 +249,8 @@ class MJPEGCamera:
 
     def _run(self):
         while not self._stop.is_set():
+            if not self._active.wait(0.1):
+                continue
             connection = None
             try:
                 with self._lock:
@@ -258,7 +282,7 @@ class MJPEGCamera:
                 self._content_type = content_type
                 self._set_connection(True)
                 buffer = b''
-                while not self._stop.is_set():
+                while not self._stop.is_set() and self._active.is_set():
                     chunk = response.read1(65536)
                     if not chunk:
                         raise ConnectionError('카메라가 HTTP 스트림을 종료했습니다')
@@ -269,8 +293,11 @@ class MJPEGCamera:
                     if len(buffer) > self.MAX_BUFFER:
                         raise ValueError('JPEG 프레임 버퍼가 제한을 넘었습니다')
             except (OSError, HTTPException, ValueError, ConnectionError) as exc:
-                self._set_connection(False, str(exc))
-                self._stop.wait(2.0)
+                if self._active.is_set():
+                    self._set_connection(False, str(exc))
+                    self._stop.wait(2.0)
+                else:
+                    self._set_connection(False)
             finally:
                 if connection:
                     connection.close()

@@ -70,6 +70,11 @@ class PinkyCameraControl:
             self._stream_url = stream_url or self._stream_url
             self._state = 'on' if self._enabled else 'off'
             self._error = ''
+        if self.camera:
+            if self._enabled:
+                self.camera.activate()
+            else:
+                self.camera.deactivate()
         LOGGER.info('%s 카메라 BLE %s 완료: %s', self.name,
                     '시작' if enabled else '중지', self.host)
         if enabled:
@@ -162,7 +167,13 @@ class PinkyCameraControl:
                     raise RuntimeError(str(result.get('message') or '로봇이 카메라 명령을 거부했습니다.'))
                 LOGGER.info('%s 로봇 set_camera 응답: %s', self.name, result)
             except Exception as exc:
-                raise _CameraCommandError(f'{self.host} 카메라 명령 실패: {self._error_message(exc)}') from exc
+                detail = str(exc).strip()
+                if detail.lower().startswith('unknown cmd: set_camera'):
+                    detail = ('로봇 BLE 카메라 제어 서비스가 구버전입니다. '
+                              '로봇의 /opt/pinky-ble/ble_server.py를 카메라 지원 버전으로 업데이트하고 서비스를 재시작하세요.')
+                else:
+                    detail = self._error_message(exc)
+                raise _CameraCommandError(f'{self.host} 카메라 명령 실패: {detail}') from exc
             return result
 
     @staticmethod
@@ -182,6 +193,8 @@ class PinkyCameraControl:
 
     @staticmethod
     def _error_message(exc):
+        if isinstance(exc, _CameraCommandError):
+            return str(exc)
         detail = str(exc).strip()
         if not detail:
             detail = '오류 메시지가 없는 BLE 예외'

@@ -21,13 +21,22 @@ def handler_for(fleet):
             self.wfile.write(payload)
 
         def do_GET(self):
-            if self.path == '/':
+            route = self.path.split('?', 1)[0]
+            if route == '/':
                 page = Path(get_package_share_directory('pinky_fleet')) / 'web' / 'fleet.html'
                 self.send(200, page.read_bytes(), 'text/html; charset=utf-8')
-            elif self.path.startswith('/camera/') and self.path.endswith('.mjpg'):
-                robot_id = self.path[len('/camera/'): -len('.mjpg')]
+            elif route.startswith('/camera/') and route.endswith('.jpg'):
+                robot_id = route[len('/camera/'): -len('.jpg')]
                 camera = fleet.cameras.get(robot_id)
-                if not camera or not camera.enabled:
+                image, _ = camera.display_frame() if camera and camera.active else (None, 0)
+                if image is None:
+                    self.send(503, dict(error='Camera stream is not active'))
+                    return
+                self.send(200, image, 'image/jpeg')
+            elif route.startswith('/camera/') and route.endswith('.mjpg'):
+                robot_id = route[len('/camera/'): -len('.mjpg')]
+                camera = fleet.cameras.get(robot_id)
+                if not camera or not camera.active:
                     self.send(404, dict(error='Camera is not configured'))
                     return
                 self.send_response(200)
@@ -47,9 +56,9 @@ def handler_for(fleet):
                         self.wfile.flush()
                 except (BrokenPipeError, ConnectionResetError, OSError):
                     pass
-            elif self.path == '/api/state':
+            elif route == '/api/state':
                 self.send(200, fleet.state())
-            elif self.path == '/api/map':
+            elif route == '/api/map':
                 map_id, data = fleet.map()
                 self.send(200, dict(id=map_id, map=data))
             else:

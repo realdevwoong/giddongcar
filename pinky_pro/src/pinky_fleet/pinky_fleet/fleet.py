@@ -14,6 +14,7 @@ class Fleet:
         self.robots = robots
         self.cameras = cameras or {}
         self.camera_controls = camera_controls or {}
+        self.camera_lock = threading.Lock()
         # 교통 정리. zones가 없으면 끈다. 지도가 구역 파일과 다르면 첫 확인 때 스스로 끈다.
         # 칸 정보(gate)는 목적지 검사에만 쓰고, 움직이는 중 판단은 양보 규칙(rule)이 한다
         self.gate = TrafficGate(zones) if zones else None
@@ -75,7 +76,18 @@ class Fleet:
             if not controller:
                 raise CommandError('카메라 제어가 준비되지 않았습니다.', 'camera_control_unavailable')
             try:
-                return controller.request(action == 'camera_start')
+                with self.camera_lock:
+                    if action == 'camera_start':
+                        if controller.status()['enabled']:
+                            return '카메라가 이미 켜져 있습니다.'
+                        same_robot_stream = any(
+                            other_id != robot_id and other.host == controller.host and other.status()['enabled']
+                            for other_id, other in self.camera_controls.items())
+                        if same_robot_stream:
+                            raise ValueError('같은 로봇 카메라가 다른 대시보드 항목에서 이미 켜져 있습니다.')
+                    elif not controller.status()['enabled']:
+                        return '카메라가 이미 꺼져 있습니다.'
+                    return controller.request(action == 'camera_start')
             except ValueError as exc:
                 raise CommandError(str(exc), 'camera_control_failed') from exc
         if action not in ('goal', 'initialpose', 'stop', 'spin'):

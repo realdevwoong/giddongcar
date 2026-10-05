@@ -61,6 +61,7 @@ class CameraStreamTests(unittest.TestCase):
         camera = MJPEGCamera('127.0.0.1', server.server_port, 'test')
         try:
             camera.start()
+            camera.activate()
             deadline = time.monotonic() + 2
             received = None
             while time.monotonic() < deadline:
@@ -105,6 +106,7 @@ class CameraStreamTests(unittest.TestCase):
         camera = MJPEGCamera('127.0.0.1', server.server_port, 'snapshot-test')
         try:
             camera.start()
+            camera.activate()
             deadline = time.monotonic() + 2
             received, sequence = None, 0
             while time.monotonic() < deadline:
@@ -144,6 +146,7 @@ class CameraStreamTests(unittest.TestCase):
 
     def test_camera_status_distinguishes_waiting_from_received_video(self):
         camera = MJPEGCamera('camera-host', name='robot1')
+        camera.activate()
         camera._set_connection(True)
         status = camera.status()
         self.assertEqual(status['state'], 'waiting')
@@ -153,6 +156,7 @@ class CameraStreamTests(unittest.TestCase):
 
     def test_camera_connection_error_is_exposed_in_status(self):
         camera = MJPEGCamera('camera-host', name='robot1')
+        camera.activate()
         camera._set_connection(False, 'MJPEG 응답 형식 오류')
         status = camera.status()
         self.assertEqual(status['state'], 'offline')

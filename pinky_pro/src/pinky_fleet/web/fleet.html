@@ -153,6 +153,7 @@ button.cchip[aria-pressed="true"] { border-color: var(--rc); box-shadow: inset 0
 .cam-status.online { color: #6fdca0; }
 .cam-status.stale, .cam-status.offline { color: var(--amber); }
 .cam-note { display: block; padding: 2px 8px; color: var(--muted); font-size: 11px; }
+.cam-note[hidden] { display: none; }
 .cam-control { display: flex; align-items: center; gap: 6px;
   padding: 5px 8px; flex-wrap: wrap; border-top: 1px solid var(--line); background: var(--card); }
 .cam-control-status { flex: 1 1 auto; min-width: 10em; color: var(--muted); font-size: 12px; }
@@ -452,7 +453,7 @@ dialog dt { font-weight: 700; }
     <div class="cam" data-el="cam" hidden>
       <img data-el="camImage" alt="로봇 카메라 영상" />
       <span class="cam-status" data-el="camStatus" role="status">카메라 연결 대기</span>
-      <span class="cam-note">Pinky Studio의 영상 창을 닫아 주세요. 카메라 스트림은 한 곳에서만 사용할 수 있습니다.</span>
+      <span class="cam-note" data-el="camNote" hidden>Pinky Studio가 카메라를 사용 중입니다. Studio 영상 창을 닫고 다시 시작하세요.</span>
       <div class="cam-control">
         <span class="cam-control-status" data-el="camControlStatus" role="status"></span>
         <button type="button" class="btn sm" data-el="camStart">카메라 시작</button>
@@ -535,6 +536,8 @@ const pending = {robot1: null, robot2: null};       // 로봇별 요청 대기 {
 const stopPending = {robot1: 0, robot2: 0};
 const cameraPending = {robot1: false, robot2: false};
 const cameraObservation = {robot1: {active: false, sequence: 0, signature: null}, robot2: {active: false, sequence: 0, signature: null}};
+const cameraImages = {}, cameraImageTimers = {}, cameraImageBusy = {robot1: false, robot2: false};
+const cameraDisplay = {robot1: '', robot2: ''};
 const sentPose = {robot1: null, robot2: null};      // 방금 보낸 초기 위치 고리 {pose, until}
 const planned = {robot1: null, robot2: null};       // 찍어 두고 아직 출발하지 않은 목적지 {x, y, yaw}
 // inflightSince: 지금 진행 중인 /api/state 요청을 시작한 시각 (없으면 0). 끊김은 '실제 요청이 늦거나 실패할 때'만 판단한다
@@ -550,6 +553,36 @@ for (const id of IDS) track[id] = {
 // ─────────────── 작은 도우미 ───────────────
 const $ = s => document.querySelector(s);
 const robot = id => robots.find(r => r.id === id);
+async function refreshCameraImage(id) {
+  const image = cameraImages[id];
+  if (!image || cameraImageBusy[id]) return;
+  const current = robot(id);
+  const camera = current && current.camera;
+  if (!camera || !camera.active) return;
+  cameraImageBusy[id] = true;
+  try {
+    const endpoint = camera.url || `/camera/${id}.jpg`;
+    const response = await fetch(`${endpoint}${endpoint.includes('?') ? '&' : '?'}t=${Date.now()}`, {cache: 'no-store'});
+    if (!response.ok) {
+      cameraDisplay[id] = `대시보드 영상 요청 실패 HTTP ${response.status}`;
+      return;
+    }
+    const blob = await response.blob();
+    if (!blob.type.includes('image/jpeg') || !blob.size) {
+      cameraDisplay[id] = `영상 응답 오류 (${blob.type || '형식 없음'}, ${blob.size} bytes)`;
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const previous = image.dataset.objectUrl;
+    image.src = url;
+    image.dataset.objectUrl = url;
+    if (previous) URL.revokeObjectURL(previous);
+  } catch (error) {
+    cameraDisplay[id] = `대시보드 영상 요청 실패: ${String(error).slice(0, 80)}`;
+  } finally {
+    cameraImageBusy[id] = false;
+  }
+}
 const xy = p => `${p.x.toFixed(2)}, ${p.y.toFixed(2)}`;
 const deg = yaw => Math.round(yaw * 180 / Math.PI);
 // 먼저 초 단위로 반올림하고 나눈다 (59.6초 → '1분 0초', '60초'나 '1분 60초'가 되지 않게)
@@ -623,6 +656,13 @@ for (const id of IDS) {
       ? '인식 관찰 기록 시작 — 주행 명령에는 연결되지 않습니다.'
       : '인식 관찰 기록을 마쳤습니다.', 'info');
   };
+  cameraImages[id] = el.camImage;
+  el.camImage.onload = () => {
+    cameraDisplay[id] = el.camImage.naturalWidth && el.camImage.naturalHeight
+      ? `브라우저 표시 ${el.camImage.naturalWidth}×${el.camImage.naturalHeight}`
+      : '브라우저 이미지 디코딩 실패';
+  };
+  el.camImage.onerror = () => { cameraDisplay[id] = '브라우저 이미지 디코딩 실패'; };
   el.go.onclick = () => go(id);
   el.resend.onclick = () => resend(id);
   el.setpose.onclick = () => armSetup(id);
@@ -1686,11 +1726,19 @@ function renderCard(id) {
   card.classList.toggle('camera-enabled', !!(camera && camera.enabled));
   show(el.cam, !!(camera && camera.enabled));
   if (camera && camera.enabled) {
-    const src = camera.url || `/camera/${id}.mjpg`;
-    if (el.camImage.dataset.src !== src) { el.camImage.dataset.src = src; el.camImage.src = src; }
+    if (camera.active) {
+      if (!cameraImageTimers[id]) cameraImageTimers[id] = setInterval(() => refreshCameraImage(id), 150);
+    } else {
+      clearInterval(cameraImageTimers[id]);
+      cameraImageTimers[id] = 0;
+      el.camImage.removeAttribute('src');
+      el.camImage.dataset.src = '';
+      if (el.camImage.dataset.objectUrl) URL.revokeObjectURL(el.camImage.dataset.objectUrl);
+      delete el.camImage.dataset.objectUrl;
+    }
     const states = {connecting: '카메라 HTTP 연결 시도 중', waiting: 'HTTP 연결됨 · 첫 JPEG 프레임 대기 중',
       online: '영상 수신 중', stale: '영상 수신 지연',
-      offline: '카메라 연결 실패 · 재연결 중', disabled: '카메라 사용 안 함'};
+      offline: '카메라 연결 실패 · 재연결 중', disabled: '카메라 사용 안 함', idle: '카메라 꺼짐'};
     const age = Number.isFinite(camera.age_s) ? ` · 마지막 영상 ${camera.age_s.toFixed(1)}초 전` : '';
     const streamError = camera.error ? ` · ${camera.error}` : '';
     const sourceAddress = camera.frames === 0 && camera.source_url ? ` · 주소 ${camera.source_url}` : '';
@@ -1729,7 +1777,8 @@ function renderCard(id) {
     const sourceAge = Number.isFinite(inference.source_age_s) && inference.state === 'online'
       ? ` · 처리 영상 지연 ${inference.source_age_s.toFixed(2)}초` : '';
     const inferStale = Number.isFinite(inference.age_s) && inference.age_s > 2.5;
-    setText(el.camStatus, (states[camera.state] || '카메라 상태 확인 중') + age + streamError + sourceAddress + perf + inferAge + sourceAge + labels);
+    const display = cameraDisplay[id] ? ` · ${cameraDisplay[id]}` : '';
+    setText(el.camStatus, (states[camera.state] || '카메라 상태 확인 중') + age + streamError + sourceAddress + perf + inferAge + sourceAge + labels + display);
     setClass(el.camStatus, 'cam-status ' + (camera.state || '') +
       (inference.state === 'error' || inferStale ? ' stale' : ''));
     setAttr(el.camStatus, 'title', camera.error || inference.error || el.camStatus.textContent);
@@ -1740,6 +1789,7 @@ function renderCard(id) {
     const controlUrl = control.stream_url ? ` · 로봇 주소 ${control.stream_url}` : '';
     setText(el.camControlStatus, (controlStates[control.state] || '카메라 상태 확인 중') + controlUrl);
     setAttr(el.camControlStatus, 'title', control.error || control.stream_url || controlStates[control.state] || null);
+    show(el.camNote, control.state === 'error' && /다른 프로그램에서 사용 중/.test(control.error || ''));
     const busy = cameraPending[id] || control.state === 'starting' || control.state === 'stopping';
     el.camStart.disabled = !control.configured || busy || control.enabled;
     el.camStop.disabled = !control.configured || busy || !control.enabled;
