@@ -14,6 +14,7 @@ setup(
         ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
         ('share/' + package_name + '/web', glob('web/*.html')),
         ('share/' + package_name + '/maps', glob('maps/*')),
+        ('share/' + package_name + '/models', glob('models/*.pt')),
         ('share/' + package_name + '/params', glob('params/*.yaml')),
         ('share/' + package_name + '/worlds', glob('worlds/*.world')),
     ],

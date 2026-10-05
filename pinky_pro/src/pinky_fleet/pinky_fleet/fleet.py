@@ -2,6 +2,7 @@
 import threading
 
 from pinky_fleet.robot import Robot
+from pinky_fleet.camera_control import PinkyCameraControl
 from pinky_fleet.traffic import TrafficGate, YieldRule, map_mismatch
 from pinky_fleet.fleet_common import (
     BACK_LIMIT, BACK_SPEED, BACK_STEP, FOLLOWER, LEADER, RETRY_CODES, RETRY_LIMIT,
@@ -9,8 +10,10 @@ from pinky_fleet.fleet_common import (
 )
 
 class Fleet:
-    def __init__(self, robots, zones=None):
+    def __init__(self, robots, zones=None, cameras=None, camera_controls=None):
         self.robots = robots
+        self.cameras = cameras or {}
+        self.camera_controls = camera_controls or {}
         # 교통 정리. zones가 없으면 끈다. 지도가 구역 파일과 다르면 첫 확인 때 스스로 끈다.
         # 칸 정보(gate)는 목적지 검사에만 쓰고, 움직이는 중 판단은 양보 규칙(rule)이 한다
         self.gate = TrafficGate(zones) if zones else None
@@ -38,6 +41,13 @@ class Fleet:
     def state(self):
         map_id, _ = self.map()
         states = [robot.snapshot() for robot in self.robots.values()]
+        for state in states:
+            camera = self.cameras.get(state['id'])
+            state['camera'] = camera.status() if camera else dict(
+                enabled=False, state='disabled', frames=0, age_s=None, error='', url=None)
+            control = self.camera_controls.get(state['id'])
+            state['camera']['control'] = control.status() if control else dict(
+                configured=False, state='unconfigured', enabled=False, running=False, error='')
         if self.yielding['action'] != 'go' and self.yielding['target']:
             # Nav2 목표 취소는 양보를 위해 자동으로 한 것이므로 사용자 취소처럼 보이지 않게 한다.
             for state in states:
@@ -58,7 +68,17 @@ class Fleet:
         return dict(enabled=self.traffic_off is None, off=self.traffic_off, note=self.traffic_note, yielding=shown)
 
     def command(self, robot_id, action, body):
-        if robot_id not in self.robots or action not in ('goal', 'initialpose', 'stop', 'spin'):
+        if robot_id not in self.robots:
+            raise CommandError('Unknown robot or action', 'unknown_route')
+        if action in ('camera_start', 'camera_stop'):
+            controller = self.camera_controls.get(robot_id)
+            if not controller:
+                raise CommandError('카메라 제어가 준비되지 않았습니다.', 'camera_control_unavailable')
+            try:
+                return controller.request(action == 'camera_start')
+            except ValueError as exc:
+                raise CommandError(str(exc), 'camera_control_failed') from exc
+        if action not in ('goal', 'initialpose', 'stop', 'spin'):
             raise CommandError('Unknown robot or action', 'unknown_route')
         robot = self.robots[robot_id]
         if action != 'stop':
@@ -197,4 +217,3 @@ class Fleet:
                     self.retry_tick()
             except Exception as exc:
                 self.traffic_note = f'다시 보내기 오류: {exc}'
-

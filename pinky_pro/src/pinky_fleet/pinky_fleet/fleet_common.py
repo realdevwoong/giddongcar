@@ -2,6 +2,8 @@
 import math
 import threading
 
+def yaw(q):
+    return math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
 
 
 # action_msgs/GoalStatus 번호 → (상태 키, 화면 글자). 0(UNKNOWN)이거나 목표가 없으면 대기.
@@ -41,12 +43,6 @@ BACK_LIMIT = 3      # 이만큼 연달아 물러나도 길 위면 더 물러나�
 # 다시 보내면 지나가는 경우가 많다. 0 = 복구를 다 쓰고 이유 없이 끝남
 RETRY_CODES = {0, 104, 105, 106}
 RETRY_LIMIT = 3
-
-
-
-def yaw(q):
-    return math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
-
 
 class CommandError(ValueError):
     """명령 실패. code는 화면이 글자 대신 보고 판단하는 이름이다(예: 'map_mismatch')."""
@@ -91,5 +87,3 @@ def await_future(future, timeout=4):
         # Do not retry automatically: a timed-out request may still reach Nav2.
         raise TimeoutError('응답 시간 초과: 요청이 처리됐을 수 있습니다. 상태를 확인하세요.')
     return future.result()
-
-

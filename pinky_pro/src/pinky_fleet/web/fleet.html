@@ -133,6 +133,7 @@ button.cchip[aria-pressed="true"] { border-color: var(--rc); box-shadow: inset 0
 .card { position: relative; min-width: 0; display: flex; flex-direction: column; gap: 4px; overflow: hidden;
   padding: 10px 14px 10px 12px; border: 1px solid var(--line); border-left: 5px solid var(--rc); border-radius: 10px;
   background: var(--card); container-type: inline-size; }
+
 .card > * { flex: none; }   /* 줄이 글자 중간에서 눌려 잘리지 않게 */
 /* 카드가 좁으면 domain 글자 → 다시 보내기 좌표 순으로 숨긴다 ('이동 취소' 글자는 줄이지 않는다) */
 @container (max-width: 540px) { .card.crowded .dom, .card.crowded .seltag { display: none; } }
@@ -146,6 +147,14 @@ button.cchip[aria-pressed="true"] { border-color: var(--rc); box-shadow: inset 0
 /* 끊긴 로봇: 이름·설명만 흐리게. 아직 누를 수 있는 '이동 취소'와 마지막 위치 줄은 원래 밝기 */
 .card.dim .c-name, .card.dim .detail { opacity: .6; }
 .card.stale { opacity: .7; }
+.cam { min-width: 0; border: 1px solid var(--line); border-radius: 8px; background: #080c12; }
+.cam img { display: block; width: 100%; height: clamp(120px, 22vh, 260px); object-fit: contain; border-radius: 7px 7px 0 0; }
+.cam-status { display: block; padding: 4px 8px; color: var(--muted); font-size: 12px; }
+.cam-status.online { color: #6fdca0; }
+.cam-status.stale, .cam-status.offline { color: var(--amber); }
+.cam-control { display: flex; align-items: center; gap: 6px;
+  padding: 5px 8px; flex-wrap: wrap; border-top: 1px solid var(--line); background: var(--card); }
+.cam-control-status { flex: 1 1 auto; min-width: 10em; color: var(--muted); font-size: 12px; }
 .c-head { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; min-width: 0; min-height: 28px; }
 .c-name { display: inline-flex; align-items: center; gap: 7px; flex: 0 1 auto; min-width: 0; margin-left: -4px; padding: 0 4px;
   border: 0; border-radius: 6px; background: none; font-size: 16px; font-weight: 700; white-space: nowrap; overflow: hidden; }
@@ -243,6 +252,15 @@ dialog dt { font-weight: 700; }
   .band { height: 40px; }
   .detail { font-size: 14px; line-height: 1.3; }
   .rchip, .tool { height: 36px; }
+}
+@media (min-width: 1500px) and (min-height: 760px) {
+  main { grid-template-columns: minmax(0, 1fr) minmax(280px, 34vw) minmax(260px, 300px);
+    grid-template-rows: var(--tools) minmax(0, 1fr) auto;
+    grid-template-areas: "tools tools tools" "map c1 log" "coords c2 log"; }
+  .cam img { height: min(28vh, 300px); }
+}
+@media (min-width: 1100px) and (max-width: 1499px) and (min-height: 760px) {
+  .cam img { height: clamp(150px, 24vh, 260px); }
 }
 @media (max-width: 1099px) {
   .alert { order: 9; flex-basis: 100%; }
@@ -429,7 +447,15 @@ dialog dt { font-weight: 700; }
         <button type="button" class="lamp-fail" data-el="lampFail" hidden aria-label="램프 응답 없음 — 도움말 열기">✕ 램프 응답 없음</button></span>
     </div>
     <!-- 자리: 카메라 미리보기(MJPEG) — 주소는 API에서 받는다. 그 전에는 아무것도 그리지 않는다 -->
-    <div class="cam" data-el="cam" hidden></div>
+    <div class="cam" data-el="cam" hidden>
+      <img data-el="camImage" alt="" />
+      <span class="cam-status" data-el="camStatus" role="status">카메라 연결 대기</span>
+      <div class="cam-control">
+        <span class="cam-control-status" data-el="camControlStatus" role="status"></span>
+        <button type="button" class="btn sm" data-el="camStart">카메라 시작</button>
+        <button type="button" class="btn sm cancel" data-el="camStop">중지</button>
+      </div>
+    </div>
   </section>
 </template>
 
@@ -503,6 +529,7 @@ let openIssues = [];
 let summaryAt = 0, shortcutsOn = true;
 const pending = {robot1: null, robot2: null};       // 로봇별 요청 대기 {action, target} (다른 로봇은 막지 않는다)
 const stopPending = {robot1: 0, robot2: 0};
+const cameraPending = {robot1: false, robot2: false};
 const sentPose = {robot1: null, robot2: null};      // 방금 보낸 초기 위치 고리 {pose, until}
 const planned = {robot1: null, robot2: null};       // 찍어 두고 아직 출발하지 않은 목적지 {x, y, yaw}
 // inflightSince: 지금 진행 중인 /api/state 요청을 시작한 시각 (없으면 0). 끊김은 '실제 요청이 늦거나 실패할 때'만 판단한다
@@ -578,6 +605,8 @@ for (const id of IDS) {
   el.toolPose.onclick = () => arm(id, 'initialpose');
   el.toolGoal.onclick = () => arm(id, 'goal');
   el.cancel.onclick = () => { planned[id] = null; send(id, 'stop'); };
+  el.camStart.onclick = () => cameraControl(id, 'camera_start');
+  el.camStop.onclick = () => cameraControl(id, 'camera_stop');
   el.go.onclick = () => go(id);
   el.resend.onclick = () => resend(id);
   el.setpose.onclick = () => armSetup(id);
@@ -1336,7 +1365,8 @@ $('#kbdOff').onchange = e => {
 
 // ─────────────── 요청 (로봇별 대기, 8초 제한, 자동 재시도 없음) ───────────────
 async function request(url, options = {}) {
-  const response = await fetch(url, {...options, signal: AbortSignal.timeout(TIMEOUT_MS)});
+  const {timeoutMs = TIMEOUT_MS, ...fetchOptions} = options;
+  const response = await fetch(url, {...fetchOptions, signal: AbortSignal.timeout(timeoutMs)});
   let body;
   try { body = await response.json(); }
   catch (e) {
@@ -1383,6 +1413,21 @@ async function send(id, action, pose) {
   track[id].result = {...result, at: Date.now()};
   $('#srPolite').textContent = `${id} ${result.text}`;
   render(); draw();
+}
+async function cameraControl(id, action) {
+  if (cameraPending[id]) return;
+  cameraPending[id] = true;
+  render();
+  try {
+    const res = await request(`/api/robots/${id}/${action}`,
+      {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}', timeoutMs: 60000});
+    log(id, '◉', res.message, 'info');
+  } catch (err) {
+    log(id, '✕', err.message, 'crit');
+  } finally {
+    cameraPending[id] = false;
+    render();
+  }
 }
 // 목적지는 찍어 두기만 한다(출발은 ▶ 출발 / ▶ 둘 다 출발). 초기 위치는 바로 보낸다
 function place(id, kind, pose) {
@@ -1621,6 +1666,46 @@ function renderCard(id) {
   if (on) el.progBar.style.width = (Math.max(0, Math.min(1, 1 - n.feedback.distance / t.goalMax.max)) * 100).toFixed(1) + '%';
   setText(el.detail, v.detail); setAttr(el.detail, 'title', v.detail);
   setText(el.pos, v.pos || ''); setAttr(el.pos, 'title', v.pos || null);
+  const camera = r && r.camera;
+  card.classList.toggle('camera-enabled', !!(camera && camera.enabled));
+  show(el.cam, !!(camera && camera.enabled));
+  if (camera && camera.enabled) {
+    const src = camera.url || `/camera/${id}.mjpg`;
+    if (el.camImage.dataset.src !== src) { el.camImage.dataset.src = src; el.camImage.src = src; }
+    const states = {connecting: '카메라 연결 중', online: '카메라 연결됨', stale: '영상 수신 지연',
+      offline: '카메라 연결 끊김 · 재연결 중', disabled: '카메라 사용 안 함'};
+    const age = Number.isFinite(camera.age_s) ? ` · 마지막 영상 ${camera.age_s.toFixed(1)}초 전` : '';
+    const inference = camera.inference || {};
+    const found = Array.isArray(inference.detections) ? inference.detections : [];
+    const best = new Map();
+    for (const item of found) {
+      if (item && typeof item.label === 'string' && Number.isFinite(item.confidence))
+        best.set(item.label, Math.max(best.get(item.label) || 0, item.confidence));
+    }
+    const labels = best.size ? ` · ${[...best].slice(0, 4).map(([name, confidence]) =>
+      `${name} ${confidence.toFixed(2)}`).join(', ')}` : '';
+    const perf = Number.isFinite(inference.fps) && inference.state === 'online'
+      ? ` · 인식 ${inference.fps.toFixed(1)} FPS${Number.isFinite(inference.latency_ms) ? ` / ${inference.latency_ms.toFixed(0)} ms` : ''}`
+      : '';
+    const inferAge = Number.isFinite(inference.age_s) && inference.state === 'online'
+      ? ` · 결과 ${inference.age_s.toFixed(1)}초 전` : '';
+    const sourceAge = Number.isFinite(inference.source_age_s) && inference.state === 'online'
+      ? ` · 처리 영상 지연 ${inference.source_age_s.toFixed(2)}초` : '';
+    const inferStale = Number.isFinite(inference.age_s) && inference.age_s > 2.5;
+    setText(el.camStatus, (states[camera.state] || '카메라 상태 확인 중') + age + perf + inferAge + sourceAge + labels);
+    setClass(el.camStatus, 'cam-status ' + (camera.state || '') +
+      (inference.state === 'error' || inferStale ? ' stale' : ''));
+    setAttr(el.camStatus, 'title', camera.error || inference.error || el.camStatus.textContent);
+    const control = camera.control || {};
+    const controlStates = {unconfigured: '카메라 IP 설정 필요', off: '카메라 꺼짐', starting: '카메라 시작 명령 전송 중',
+      on: control.running ? '스트리밍 중' : '카메라 켜짐 · 스트림 대기',
+      stopping: '카메라 중지 명령 전송 중', error: `카메라 제어 오류: ${control.error || '상태 확인 필요'}`};
+    setText(el.camControlStatus, controlStates[control.state] || '카메라 상태 확인 중');
+    setAttr(el.camControlStatus, 'title', control.error || controlStates[control.state] || null);
+    const busy = cameraPending[id] || control.state === 'starting' || control.state === 'stopping';
+    el.camStart.disabled = !control.configured || busy || control.enabled;
+    el.camStop.disabled = !control.configured || busy || !control.enabled;
+  }
   // 마지막 요청 결과 (10초 지나면 흐리게). 전체 글자는 이벤트 기록에도 남는다
   let text = '', cls = 'result num', fresh = false;
   if (stopPending[id]) { fresh = true; text = '… 이동 취소 요청 중' + (pending[id] ? ' (앞 요청 처리 뒤 실행)' : ''); }

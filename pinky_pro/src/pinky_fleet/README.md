@@ -58,6 +58,40 @@ ROS_DOMAIN_ID=15 ros2 run tf2_ros tf2_echo map base_link
 ROS_DOMAIN_ID=17 ros2 run tf2_ros tf2_echo map base_link
 ```
 
+## 카메라 영상
+
+Pinky Pro 카메라는 로봇 이미지 `pinky_pro_v1.9` 이상에서 BLE 명령으로 시작·중지할 수 있습니다. 대시보드 로봇 카드의 **카메라 시작/중지** 버튼을 누르면 PC가 BLE로 로봇을 찾고, 로봇이 응답한 IP로 대상을 확인한 뒤 명령을 보냅니다. PC Bluetooth가 켜져 있어야 하며, 카메라 영상은 로봇 IP의 HTTP MJPEG 서버 `:5000/`에서 받습니다.
+
+`start_fleet.sh`는 `~/.config/pinky_fleet.env`의 `ROBOT1_IP`, `ROBOT2_IP`를 카메라 주소로 쓰며, 기본 포트는 `5000`입니다.
+
+```bash
+ros2 launch pinky_fleet multi_robot.launch.py \
+  robot1_camera_host:=<로봇1주소> robot2_camera_host:=<로봇2주소> camera_port:=5000
+```
+
+대시보드 각 로봇 카드에서 스트리밍을 켜고 영상·연결 상태를 확인할 수 있습니다. `start_fleet.sh` 실행은 `~/.config/pinky_fleet.env`의 `ROBOT1_IP`, `ROBOT2_IP` 주소를 사용합니다. YOLO는 패키지의 고정 경로 `pinky_fleet/models/yolo11n.pt`에서 자동으로 읽습니다.
+
+
+YOLO와 GPU용 PyTorch 설치는 저장소 루트에서 한 번 실행합니다. 시스템 ROS Python과 패키지를 분리하면서 ROS 패키지에 접근할 수 있도록 `--system-site-packages` venv를 사용합니다.
+
+```bash
+cd ~/Desktop/giddongcar
+python3 -m venv --system-site-packages .venv
+.venv/bin/python -m pip install ultralytics bleak
+```
+
+가상환경은 CUDA 지원 PyTorch 등 용량이 큰 패키지를 설치합니다. GPU 사용 가능 여부는 아래처럼 확인할 수 있습니다.
+
+```bash
+source /opt/ros/jazzy/setup.bash
+PYTHONPATH="$PWD/.venv/lib/python3.12/site-packages${PYTHONPATH:+:$PYTHONPATH}" \
+  python3 -c "import torch, ultralytics; print('Ultralytics', ultralytics.__version__); print('PyTorch', torch.__version__); print('CUDA 사용 가능:', torch.cuda.is_available())"
+```
+
+실물 관제는 `scripts/start_fleet.sh`가 이 venv를 ROS Python import 경로에 자동으로 추가합니다. 직접 `ros2 launch`할 때는 위의 `PYTHONPATH` 설정을 같은 터미널에서 먼저 실행해야 합니다. `.pt` 가중치는 대용량 모델 파일이므로 Git에는 넣지 않습니다. 고정 경로에 가중치가 없으면 Ultralytics가 `YOLO('yolo11n.pt')` 로딩 중 공식 배포처에서 자동으로 내려받습니다. 첫 다운로드에는 인터넷 연결이 필요합니다. 다운로드나 모델 초기화에 실패해도 카메라 원본 영상과 Nav2 실행은 계속되며 YOLO 상태에 오류가 표시됩니다.
+
+스트림을 시작한 뒤 영상이 안 나오면 로봇에서 `sudo ss -ltnp | grep ':5000'`으로 서버가 열렸는지 확인합니다. 포트 `8888`은 Jupyter용이며 카메라는 `5000`을 사용합니다. 영상 표시는 로봇 구동 명령을 보내지 않습니다.
+
 ## 실행 (Gazebo, 로봇 2대)
 
 ```bash

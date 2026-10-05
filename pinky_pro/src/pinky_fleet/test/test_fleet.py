@@ -7,6 +7,7 @@ import tempfile
 import threading
 import time
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
@@ -24,6 +25,83 @@ from rclpy.time import Time
 import pinky_fleet.fleet_dashboard as dashboard
 from pinky_fleet.fleet_dashboard import CommandError, Fleet, Robot, handler_for, pose_input, await_future
 from pinky_fleet.localize import Localizer
+from pinky_fleet.camera_stream import MJPEGCamera
+from pinky_fleet.perception import YOLOPerception
+
+
+class CameraStreamTests(unittest.TestCase):
+    def test_receives_http_mjpeg_from_camera_root(self):
+        frame = b'\xff\xd8test-frame\xff\xd9'
+        requested = threading.Event()
+        paths = []
+
+        class MJPEGHandler(BaseHTTPRequestHandler):
+            protocol_version = 'HTTP/1.1'
+
+            def do_GET(self):
+                paths.append(self.path)
+                requested.set()
+                self.send_response(200)
+                self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=frame')
+                self.end_headers()
+                try:
+                    self.wfile.write(b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+                    self.wfile.flush()
+                    while True:
+                        time.sleep(0.02)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
+            def log_message(self, *_args):
+                pass
+
+        server = ThreadingHTTPServer(('127.0.0.1', 0), MJPEGHandler)
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        camera = MJPEGCamera('127.0.0.1', server.server_port, 'test')
+        try:
+            camera.start()
+            deadline = time.monotonic() + 2
+            received = None
+            while time.monotonic() < deadline:
+                received, sequence = camera.latest()
+                if sequence:
+                    break
+                time.sleep(0.01)
+            self.assertTrue(requested.is_set())
+            self.assertEqual(paths, ['/'])
+            self.assertEqual(received, frame)
+        finally:
+            camera.close()
+            server.shutdown()
+            server.server_close()
+
+    def test_extracts_multiple_jpegs_and_keeps_partial_marker(self):
+        first, second = b'\xff\xd8one\xff\xd9', b'\xff\xd8two\xff\xd9'
+        frames, remaining = MJPEGCamera._take_frames(b'noise' + first + second + b'\xff')
+        self.assertEqual(frames, [first, second])
+        self.assertEqual(remaining, b'\xff')
+
+    def test_wait_next_returns_newest_frame(self):
+        camera = MJPEGCamera('', name='robot1')
+        camera._publish(b'jpeg-frame')
+        frame, sequence = camera.wait_next(0, timeout=0.01)
+        self.assertEqual((frame, sequence), (b'jpeg-frame', 1))
+        self.assertEqual(camera.status()['state'], 'disabled')
+
+    def test_overlay_status_keeps_detection_confidence(self):
+        camera = MJPEGCamera('camera-host', name='robot1')
+        camera.set_inference_state('waiting', 'model.pt')
+        camera._publish(b'jpeg-frame')
+        detection = dict(label='person', confidence=0.91, xyxy=[1.0, 2.0, 3.0, 4.0])
+        camera.set_overlay(1, b'annotated-frame', 42.0, [detection])
+        frame, _ = camera.display_frame()
+        self.assertEqual(frame, b'annotated-frame')
+        self.assertEqual(camera.status()['inference']['detections'], [detection])
+
+    def test_disabled_perception_does_not_load_yolo(self):
+        perception = YOLOPerception({'robot1': MJPEGCamera('')}, 'unused.pt')
+        self.assertIsNone(perception.model)
 
 
 class FakeRobot:
@@ -650,6 +728,8 @@ class LaunchTests(unittest.TestCase):
             self.assertEqual(len(cmd), 6)
         self.assertEqual(cmds[2], ['/fake/prefix/lib/pinky_fleet/fleet_dashboard',
                                    '--robot1-domain', '15', '--robot2-domain', '17',
+                                   '--robot1-camera-host', '', '--robot2-camera-host', '',
+                                   '--camera-port', '5000',
                                    '--host', '127.0.0.1', '--port', '8080'])
 
     def test_generated_params_wait_for_initial_pose(self):

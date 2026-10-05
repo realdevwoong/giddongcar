@@ -1,20 +1,43 @@
 #!/usr/bin/env python3
-"""One HTTP UI, separate ROS contexts and TF buffers for each robot."""
+"""Run the multi-robot fleet dashboard and camera services."""
 import argparse
 import signal
 import threading
+from pathlib import Path
 from http.server import ThreadingHTTPServer
 
+from ament_index_python.packages import get_package_share_directory
+from pinky_fleet.camera_control import PinkyCameraControl
+from pinky_fleet.camera_stream import MJPEGCamera
 from pinky_fleet.fleet import Fleet
+from pinky_fleet.perception import YOLOPerception
 from pinky_fleet.robot import Robot
 from pinky_fleet.traffic import load_zones
 from pinky_fleet.fleet_common import *  # noqa: F401,F403 - preserve dashboard imports
+from pinky_fleet.dashboard_http import handler_for
+
+import argparse
+import signal
+import threading
+from pathlib import Path
+from http.server import ThreadingHTTPServer
+
+from ament_index_python.packages import get_package_share_directory
+from pinky_fleet.camera_control import PinkyCameraControl
+from pinky_fleet.camera_stream import MJPEGCamera
+from pinky_fleet.fleet import Fleet
+from pinky_fleet.perception import YOLOPerception
+from pinky_fleet.robot import Robot
+from pinky_fleet.traffic import load_zones
 from pinky_fleet.dashboard_http import handler_for
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--robot1-domain', type=int, default=15)
     parser.add_argument('--robot2-domain', type=int, default=17)
+    parser.add_argument('--robot1-camera-host', default='')
+    parser.add_argument('--robot2-camera-host', default='')
+    parser.add_argument('--camera-port', type=int, default=5000)
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8080)
     parser.add_argument('--use-sim-time', action='store_true', help='Gazebo: /clock 시간을 쓴다')
@@ -28,12 +51,21 @@ def main():
     # nohup이나 스크립트 백그라운드로 띄우면 SIGINT 무시가 상속돼 Ctrl+C로 안 꺼진다. 항상 KeyboardInterrupt를 받게 한다.
     signal.signal(signal.SIGINT, signal.default_int_handler)
     robots = {}
+    cameras = {}
+    camera_controls = {}
+    perception = None
     server = fleet = None
     try:
         for i, domain in enumerate((args.robot1_domain, args.robot2_domain), 1):
             name = f'robot{i}'
             robots[name] = Robot(name, domain, args.use_sim_time, name in args.known_pose, args.auto_spin)
-        fleet = Fleet(robots, zones)
+            cameras[name] = MJPEGCamera(getattr(args, f'{name}_camera_host'), args.camera_port, name)
+            cameras[name].start()
+            camera_controls[name] = PinkyCameraControl(getattr(args, f'{name}_camera_host'), name)
+        fleet = Fleet(robots, zones, cameras, camera_controls)
+        model_path = Path(get_package_share_directory('pinky_fleet')) / 'models' / 'yolo11n.pt'
+        perception = YOLOPerception(cameras, str(model_path))
+        perception.start()
         threading.Thread(target=fleet.run_traffic, daemon=True).start()   # 교통 정리가 꺼져도 다시 보내기는 돈다
         server = ThreadingHTTPServer((args.host, args.port), handler_for(fleet))
         print(f'Fleet dashboard: http://{args.host}:{args.port}'
@@ -50,7 +82,12 @@ def main():
             server.server_close()
         for robot in robots.values():
             robot.close()
+        if perception:
+            perception.close()
+        for camera in cameras.values():
+            camera.close()
 
 
-if __name__ == "__main__":
+
+if __name__ == '__main__':
     main()

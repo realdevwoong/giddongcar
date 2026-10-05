@@ -98,7 +98,7 @@ fleet                                         # launch 인자는 뒤에 붙인�
 3. **안전 연습.** 로봇을 움직이기 전에 0 속도 발행(아래)을 한 번 해 본다. 주행 중에는 한 사람이 그 터미널 앞에 있는다.
 4. **첫 목표.** 관제 화면에 로봇 2대가 뜨고, 목표 하나씩 도착하면 첫날 목표 달성. 좁은 통로에는 한 대씩 보낸다.
 5. **주행 보정.** 미끄러짐·라이다 노이즈·WiFi 지연 때문에 속도 상한, footprint, inflation을 조정한다. 팀용 복사본 `pinky_fleet/params/nav2_params.yaml`(관제 기본값)을 고친다. 바꾼 곳은 "팀:" 주석으로 남긴다(지금: 좁은 문에서 collision ahead 오판을 줄인 `failure_tolerance`, `max_allowed_time_to_collision_up_to_carrot`, 문을 나오며 코너를 질러 문틀에 붙지 않게 한 `min_lookahead_dist`, `use_regulated_linear_velocity_scaling`).
-6. **카메라.** 로봇에서 카메라 노드(만들 예정, `pinky_camera`)를 처음 돌리며 해상도·프레임 속도를 맞춘다. 탐지 모델은 실물 영상으로 학습한다(영상·가중치는 커밋하지 않는다).
+6. **카메라.** PC Bluetooth를 켜고, 대시보드 로봇 카드의 카메라 시작/중지 버튼을 쓴다. 관제가 BLE에서 Pinky를 찾아 응답 IP가 설정한 로봇 주소와 일치하는지 확인한 뒤 스트리밍을 제어한다. 로봇 이미지는 `pinky_pro_v1.9` 이상이어야 하며, 영상은 로봇 IP의 HTTP MJPEG `:5000/`에서 받는다. YOLO 가중치는 `pinky_fleet/models/yolo11n.pt`에서 자동으로 읽는다. COCO 모델 결과는 화면 확인용이고 주행에 반영되지 않는다. 차선·횡단보도는 실물 영상으로 별도 데이터·모델을 검증한다. 가중치 파일은 Git에 올리지 않는다. 상세 작업 목록은 [카메라·인식 기획](real_camera_yolo_plan.md).
 
 시뮬로는 못 잡는 것: WiFi 끊김·공유기 과부하·DDS 발견 실패, 실제 충돌과 배터리, 조명에 따른 탐지 성능.
 

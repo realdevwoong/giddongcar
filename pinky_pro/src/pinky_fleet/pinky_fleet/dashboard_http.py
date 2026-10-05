@@ -1,4 +1,4 @@
-"""HTTP routes for the fleet dashboard."""
+"""HTTP routes for the fleet dashboard and camera streams."""
 import json
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
@@ -24,6 +24,29 @@ def handler_for(fleet):
             if self.path == '/':
                 page = Path(get_package_share_directory('pinky_fleet')) / 'web' / 'fleet.html'
                 self.send(200, page.read_bytes(), 'text/html; charset=utf-8')
+            elif self.path.startswith('/camera/') and self.path.endswith('.mjpg'):
+                robot_id = self.path[len('/camera/'): -len('.mjpg')]
+                camera = fleet.cameras.get(robot_id)
+                if not camera or not camera.enabled:
+                    self.send(404, dict(error='Camera is not configured'))
+                    return
+                self.send_response(200)
+                self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=frame')
+                self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
+                self.send_header('Connection', 'close')
+                self.end_headers()
+                sequence = 0
+                try:
+                    while True:
+                        image, next_sequence = camera.wait_next(sequence, timeout=1.0)
+                        if image is None or next_sequence <= sequence:
+                            continue
+                        sequence = next_sequence
+                        self.wfile.write(b'--frame\r\nContent-Type: image/jpeg\r\nContent-Length: '
+                                         + str(len(image)).encode() + b'\r\n\r\n' + image + b'\r\n')
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    pass
             elif self.path == '/api/state':
                 self.send(200, fleet.state())
             elif self.path == '/api/map':
@@ -53,4 +76,3 @@ def handler_for(fleet):
             except Exception as exc:
                 self.send(500, dict(success=False, error=str(exc)))
     return Handler
-

@@ -12,6 +12,7 @@ from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
 from launch.event_handlers import OnProcessExit, OnShutdown
 from launch.events import Shutdown
 from launch.substitutions import LaunchConfiguration
+from launch.substitutions import EnvironmentVariable
 
 # 실물 로봇 도메인(robot1, robot2). launch 인자 기본값도 여기서 가져간다. 시뮬 Nav2는 이 도메인에 붙으면 안 된다.
 REAL_DOMAINS = (15, 17)
@@ -93,6 +94,9 @@ def start(context):
     processes.append(ExecuteProcess(
         cmd=[str(dashboard),
              '--robot1-domain', str(domains[0]), '--robot2-domain', str(domains[1]),
+             '--robot1-camera-host', LaunchConfiguration('robot1_camera_host', default='').perform(context),
+             '--robot2-camera-host', LaunchConfiguration('robot2_camera_host', default='').perform(context),
+             '--camera-port', LaunchConfiguration('camera_port', default='5000').perform(context),
              '--host', value('host'), '--port', value('port')]
             + (['--use-sim-time'] if sim else [])
             # 위치를 알려 준 로봇은 전역 위치 찾기를 하지 않는다. 나머지는 대시보드가 켜지자마자 스스로 찾는다
@@ -118,6 +122,12 @@ def generate_launch_description():
         DeclareLaunchArgument('params_file', default_value=str(fleet / 'params/nav2_params.yaml')),   # 팀용 복사본
         DeclareLaunchArgument('robot1_domain', default_value=str(REAL_DOMAINS[0])),
         DeclareLaunchArgument('robot2_domain', default_value=str(REAL_DOMAINS[1])),
+        DeclareLaunchArgument('robot1_camera_host', default_value=EnvironmentVariable('ROBOT1_IP', default_value=''),
+                              description='실물 카메라 스트림을 받을 로봇1 주소. 비우면 카메라 연결을 끈다'),
+        DeclareLaunchArgument('robot2_camera_host', default_value=EnvironmentVariable('ROBOT2_IP', default_value=''),
+                              description='실물 카메라 스트림을 받을 로봇2 주소. 비우면 카메라 연결을 끈다'),
+        DeclareLaunchArgument('camera_port', default_value='5000',
+                              description='Pinky Pro HTTP MJPEG 카메라 포트'),
         DeclareLaunchArgument('host', default_value='127.0.0.1'),
         DeclareLaunchArgument('port', default_value='8080'),
         DeclareLaunchArgument('use_sim_time', default_value='false',

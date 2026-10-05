@@ -1,4 +1,4 @@
-"""ROS 2 state and command handling for one Pinky robot."""
+"""ROS interface and behavior for one Pinky robot."""
 import hashlib
 import json
 import math
@@ -18,16 +18,16 @@ from geometry_msgs.msg import PoseWithCovarianceStamped, Twist, Vector3
 from nav2_msgs.action import BackUp, NavigateToPose
 from pinky_interfaces.srv import SetLamp
 from pinky_fleet.localize import Localizer, SPIN_SPEED
-from action_msgs.msg import GoalStatusArray
+from action_msgs.msg import GoalStatus, GoalStatusArray
 from action_msgs.srv import CancelGoal
 from lifecycle_msgs.msg import State
 from lifecycle_msgs.srv import GetState
 from std_srvs.srv import Empty
 from tf2_ros import Buffer, TransformListener
-from ament_index_python.packages import get_package_share_directory
+
 from pinky_fleet.fleet_common import (
     LAMP, LAMP_HOLD, LAMP_TIMEOUT, LOC_TIMEOUT, NAV_ERRORS, NAV_STATES, NO_REASON,
-    CommandError, await_future, remember, seconds, yaw,
+    CommandError, await_future, pose_input, remember, seconds, yaw,
 )
 
 class Robot(Node):
@@ -432,4 +432,3 @@ class Robot(Node):
         self.thread.join(timeout=1)
         self.destroy_node()
         self.ros_context.try_shutdown()
-
