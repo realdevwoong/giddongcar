@@ -50,6 +50,7 @@ Nav2 설정은 제조사 원본(`pinky_navigation/params/nav2_params.yaml`)을 �
   ros2 launch pinky_fleet sim.launch.py port:=8081
   ```
   (이 PC는 8080을 Docker가 써서 `port:=8081`.) 시뮬 터미널에서 ROS 토픽을 확인할 때도 `RMW_IMPLEMENTATION=rmw_fastrtps_cpp`를 지정한다.
+- **확인 (2026-10-05)**: 셸은 Cyclone DDS와 `ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET`인 상태로 launch하고, 별도 Fast DDS CLI에서 `/clock`, `/odom`, `/scan`을 확인했다. launch 자식은 시뮬 전용 Fast DDS와 `LOCALHOST` 격리를 사용했다.
 
 ## 3. 좁은 문에서 막힌 게 없는데 "복구 N회", 이동 실패(104)
 
@@ -124,6 +125,6 @@ Nav2 설정은 제조사 원본(`pinky_navigation/params/nav2_params.yaml`)을 �
 - [ ] (7) robot1 비켜 주기: 원래 자리로 돌아갈지 결정
 - [ ] (5) robot2 양보 자리를 robot1 위험 구역 밖으로 고르기
 - [x] 화면에 양보 중·재시도 상태 표시
-- [x] `sim.launch.py`가 스스로 Fast DDS를 쓰게 하기 (2)
+- [x] `sim.launch.py` Fast DDS·LOCALHOST 격리 확인 (`/clock`, `/odom`, `/scan`) (2)
 - [ ] 실물 로봇에서 같은 값 확인 (특히 Nav2 팀 설정)
 - [ ] 커밋 (목적별로 나눠서)
