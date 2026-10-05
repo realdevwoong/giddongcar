@@ -60,7 +60,7 @@ ROS_DOMAIN_ID=17 ros2 run tf2_ros tf2_echo map base_link
 
 ## 카메라 영상
 
-Pinky Pro 카메라는 로봇 이미지 `pinky_pro_v1.9` 이상에서 BLE 명령으로 시작·중지할 수 있습니다. 대시보드 로봇 카드의 **카메라 시작/중지** 버튼을 누르면 PC가 BLE로 로봇을 찾고, 로봇이 응답한 IP로 대상을 확인한 뒤 명령을 보냅니다. PC Bluetooth가 켜져 있어야 하며, 카메라 스트림 주소는 BLE `camera_result`가 반환하면 그 주소를 우선 사용하고, 반환 주소가 없을 때만 기본 `:5000/`을 시도합니다.
+Pinky Pro 카메라는 로봇 이미지 `pinky_pro_v1.9` 이상에서 BLE 명령으로 시작·중지할 수 있습니다. 대시보드 로봇 카드의 **카메라 시작/중지** 버튼을 누르면 PC가 BLE로 로봇을 찾고, 로봇이 응답한 IP로 대상을 확인한 뒤 명령을 보냅니다. PC Bluetooth가 켜져 있어야 하며, 카메라 스트림 주소는 BLE `camera_result`가 반환하면 그 주소를 우선 사용하고, 반환 주소가 없을 때만 기본 `:5000/`을 시도합니다. Pinky Studio와 관제는 카메라 영상을 동시에 받을 수 없으므로, 관제 사용 중에는 Studio의 영상 창을 닫아야 합니다.
 
 `start_fleet.sh`는 `~/.config/pinky_fleet.env`의 `ROBOT1_IP`, `ROBOT2_IP`를 카메라 주소로 쓰며, 주소를 돌려받지 못한 경우의 기본 포트는 `5000`입니다.
 

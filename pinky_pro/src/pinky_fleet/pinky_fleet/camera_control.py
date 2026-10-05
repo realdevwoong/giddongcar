@@ -94,8 +94,10 @@ class PinkyCameraControl:
                 device_name = advertisement.local_name or device.name or ''
                 manufacturer_names = [bytes(value).decode('ascii', errors='ignore')
                                       for value in advertisement.manufacturer_data.values()]
+                service_uuids = [str(value).lower() for value in (advertisement.service_uuids or [])]
                 if (device_name.lower().startswith('pinky_')
-                        or any(value.lower().startswith('pinky_') for value in manufacturer_names)):
+                        or any(value.lower().startswith('pinky_') for value in manufacturer_names)
+                        or SERVICE_UUID in service_uuids):
                     devices.append((device.address, device_name))
         if not devices:
             raise RuntimeError('BLE에서 Pinky를 찾지 못했습니다. 로봇 전원과 BLE 연결을 확인하세요.')
@@ -154,6 +156,8 @@ class PinkyCameraControl:
                     }, 'camera_result')
                 else:
                     result = await self._send(client, messages, {'cmd': 'set_camera', 'enabled': False}, 'camera_result')
+                if result.get('conflict'):
+                    raise RuntimeError('카메라가 다른 프로그램에서 사용 중입니다. Pinky Studio의 영상 창을 닫고 다시 시도하세요.')
                 if not result.get('ok'):
                     raise RuntimeError(str(result.get('message') or '로봇이 카메라 명령을 거부했습니다.'))
                 LOGGER.info('%s 로봇 set_camera 응답: %s', self.name, result)

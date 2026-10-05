@@ -152,6 +152,7 @@ button.cchip[aria-pressed="true"] { border-color: var(--rc); box-shadow: inset 0
 .cam-status { display: block; padding: 4px 8px; color: var(--muted); font-size: 12px; }
 .cam-status.online { color: #6fdca0; }
 .cam-status.stale, .cam-status.offline { color: var(--amber); }
+.cam-note { display: block; padding: 2px 8px; color: var(--muted); font-size: 11px; }
 .cam-control { display: flex; align-items: center; gap: 6px;
   padding: 5px 8px; flex-wrap: wrap; border-top: 1px solid var(--line); background: var(--card); }
 .cam-control-status { flex: 1 1 auto; min-width: 10em; color: var(--muted); font-size: 12px; }
@@ -451,6 +452,7 @@ dialog dt { font-weight: 700; }
     <div class="cam" data-el="cam" hidden>
       <img data-el="camImage" alt="로봇 카메라 영상" />
       <span class="cam-status" data-el="camStatus" role="status">카메라 연결 대기</span>
+      <span class="cam-note">Pinky Studio의 영상 창을 닫아 주세요. 카메라 스트림은 한 곳에서만 사용할 수 있습니다.</span>
       <div class="cam-control">
         <span class="cam-control-status" data-el="camControlStatus" role="status"></span>
         <button type="button" class="btn sm" data-el="camStart">카메라 시작</button>
