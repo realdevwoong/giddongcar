@@ -109,6 +109,8 @@ def generate_launch_description():
         DeclareLaunchArgument('robot2_yaw', default_value='0.0'),
 
         # 시뮬은 이 PC 안에서만 통신한다. 실물용 DDS 설정(peer 목록, 프로파일, 디스커버리 서버)은 자식에게 물려주지 않는다.
+        # PC의 실물용 Cyclone DDS 설정과 독립적으로 시뮬은 Fast DDS를 사용한다.
+        SetEnvironmentVariable('RMW_IMPLEMENTATION', 'rmw_fastrtps_cpp'),
         SetEnvironmentVariable('ROS_AUTOMATIC_DISCOVERY_RANGE', 'LOCALHOST'),
         UnsetEnvironmentVariable('ROS_STATIC_PEERS'),
         UnsetEnvironmentVariable('FASTRTPS_DEFAULT_PROFILES_FILE'),

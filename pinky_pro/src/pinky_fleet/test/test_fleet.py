@@ -17,7 +17,7 @@ from action_msgs.srv import CancelGoal
 from geometry_msgs.msg import TransformStamped
 from nav2_msgs.action import NavigateToPose
 from launch import LaunchContext
-from launch.actions import ExecuteProcess
+from launch.actions import ExecuteProcess, SetEnvironmentVariable
 from launch.utilities import perform_substitutions
 from rclpy.time import Time
 
@@ -579,6 +579,15 @@ class SimLaunchTests(unittest.TestCase):
         urdf = self.load().gazebo_urdf('robot2')
         self.assertNotIn('gz-sim-lamp-control-system', urdf)
         self.assertIn('<topic>/robot2/', urdf)
+
+    def test_sim_launch_pins_fastdds(self):
+        description = self.load().generate_launch_description()
+        context = LaunchContext()
+        env = [(perform_substitutions(context, action.name), perform_substitutions(context, action.value))
+               for action in description.entities
+               if isinstance(action, SetEnvironmentVariable)]
+        self.assertIn(('RMW_IMPLEMENTATION', 'rmw_fastrtps_cpp'), env)
+        self.assertIn(('ROS_AUTOMATIC_DISCOVERY_RANGE', 'LOCALHOST'), env)
 
     def test_lamp_topic_uses_world_name_from_file(self):
         module = self.load()

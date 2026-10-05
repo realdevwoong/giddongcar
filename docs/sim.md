@@ -56,7 +56,7 @@ ros2 launch pinky_fleet sim.launch.py
 시뮬 Nav2가 실물 로봇에 `cmd_vel`을 보내는 사고를 두 겹으로 막는다.
 
 1. **도메인이 다르다.** 시뮬 25/27, 실물 15/17. 어느 쪽 설정이 어떻든 서로 못 만난다. 이 PC에서 실물용 터미널(도메인 15/17)을 같이 써도 된다.
-2. **`sim.launch.py`가 자식 프로세스를 이 PC 안에 가둔다.** `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`를 걸고 `ROS_STATIC_PEERS`, `FASTRTPS_DEFAULT_PROFILES_FILE`, `ROS_DISCOVERY_SERVER`, `ROS_SUPER_CLIENT`, `CYCLONEDDS_URI`를 지운다.
+2. **`sim.launch.py`가 자식 프로세스를 이 PC 안에 가둔다.** Fast DDS를 지정하고 `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`를 걸며 `ROS_STATIC_PEERS`, `FASTRTPS_DEFAULT_PROFILES_FILE`, `ROS_DISCOVERY_SERVER`, `ROS_SUPER_CLIENT`, `CYCLONEDDS_URI`를 지운다.
 
 `multi_robot.launch.py use_sim_time:=true`를 직접 띄울 때는 위 설정이 안 돼 있거나, 도메인이 실물용 15/17이면 실행을 거부한다(`robot1_domain:=25 robot2_domain:=27`을 준다).
 
@@ -70,6 +70,7 @@ ros2 launch pinky_fleet sim.launch.py
 
 ```bash
 export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 unset ROS_STATIC_PEERS FASTRTPS_DEFAULT_PROFILES_FILE ROS_DISCOVERY_SERVER ROS_SUPER_CLIENT CYCLONEDDS_URI
 ros2 daemon stop
 ROS_DOMAIN_ID=25 ros2 topic echo /scan --once

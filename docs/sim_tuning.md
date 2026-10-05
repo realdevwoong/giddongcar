@@ -44,11 +44,11 @@ Nav2 설정은 제조사 원본(`pinky_navigation/params/nav2_params.yaml`)을 �
 - **상황**: 시뮬을 하나만 켰는데도 두 로봇 위치가 안 뜨고 시계 차이 약 38초.
 - **원인**: 이 PC는 실물용으로 `~/.bashrc`에서 **Cyclone DDS**(`RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`)를 쓴다. 같은 도메인에서 6초 동안 `/odom`은 301개 왔는데 `/clock`은 0개였다.
   `/clock`은 초당 수백 번, 받는 노드가 19개라 느린 구독자 때문에 전송이 막힌 것으로 본다(측정 기반 추정).
-- **해결**: 시뮬은 Fast DDS로 켠다. 시뮬은 PC 안에서만 통신하므로 실물(Cyclone)과 상관없다.
+- **해결**: `sim.launch.py`가 Fast DDS를 자동으로 지정한다. 시뮬은 PC 안에서만 통신하므로 실물(Cyclone)과 상관없다.
   ```bash
-  RMW_IMPLEMENTATION=rmw_fastrtps_cpp ros2 launch pinky_fleet sim.launch.py port:=8081
+  ros2 launch pinky_fleet sim.launch.py port:=8081
   ```
-  (이 PC는 8080을 Docker가 써서 `port:=8081`.) 이후 시계 경고 없이 위치가 잡혔다. `sim.launch.py`가 스스로 Fast DDS를 쓰게 하는 것은 아직 안 했다.
+  (이 PC는 8080을 Docker가 써서 `port:=8081`.) 시뮬 터미널에서 ROS 토픽을 확인할 때도 `RMW_IMPLEMENTATION=rmw_fastrtps_cpp`를 지정한다.
 
 ## 3. 좁은 문에서 막힌 게 없는데 "복구 N회", 이동 실패(104)
 
@@ -122,6 +122,6 @@ Nav2 설정은 제조사 원본(`pinky_navigation/params/nav2_params.yaml`)을 �
 - [ ] (7) robot1 비켜 주기: 원래 자리로 돌아갈지 결정
 - [ ] (5) robot2 양보 자리를 robot1 위험 구역 밖으로 고르기
 - [x] 화면에 양보 중·재시도 상태 표시
-- [ ] `sim.launch.py`가 스스로 Fast DDS를 쓰게 하기 (2)
+- [x] `sim.launch.py`가 스스로 Fast DDS를 쓰게 하기 (2)
 - [ ] 실물 로봇에서 같은 값 확인 (특히 Nav2 팀 설정)
 - [ ] 커밋 (목적별로 나눠서)
