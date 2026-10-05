@@ -449,7 +449,7 @@ dialog dt { font-weight: 700; }
     </div>
     <!-- 자리: 카메라 미리보기(MJPEG) — 주소는 API에서 받는다. 그 전에는 아무것도 그리지 않는다 -->
     <div class="cam" data-el="cam" hidden>
-      <img data-el="camImage" alt="" />
+      <img data-el="camImage" alt="로봇 카메라 영상" />
       <span class="cam-status" data-el="camStatus" role="status">카메라 연결 대기</span>
       <div class="cam-control">
         <span class="cam-control-status" data-el="camControlStatus" role="status"></span>
@@ -1686,9 +1686,11 @@ function renderCard(id) {
   if (camera && camera.enabled) {
     const src = camera.url || `/camera/${id}.mjpg`;
     if (el.camImage.dataset.src !== src) { el.camImage.dataset.src = src; el.camImage.src = src; }
-    const states = {connecting: '카메라 연결 중', online: '카메라 연결됨', stale: '영상 수신 지연',
-      offline: '카메라 연결 끊김 · 재연결 중', disabled: '카메라 사용 안 함'};
+    const states = {connecting: 'MJPEG 연결 시도 중', waiting: 'HTTP 연결됨 · 첫 JPEG 프레임 대기 중',
+      online: '영상 수신 중', stale: '영상 수신 지연',
+      offline: 'MJPEG 연결 실패 · 재연결 중', disabled: '카메라 사용 안 함'};
     const age = Number.isFinite(camera.age_s) ? ` · 마지막 영상 ${camera.age_s.toFixed(1)}초 전` : '';
+    const streamError = camera.error ? ` · ${camera.error}` : '';
     const inference = camera.inference || {};
     const found = Array.isArray(inference.detections) ? inference.detections : [];
     const observe = cameraObservation[id];
@@ -1724,7 +1726,7 @@ function renderCard(id) {
     const sourceAge = Number.isFinite(inference.source_age_s) && inference.state === 'online'
       ? ` · 처리 영상 지연 ${inference.source_age_s.toFixed(2)}초` : '';
     const inferStale = Number.isFinite(inference.age_s) && inference.age_s > 2.5;
-    setText(el.camStatus, (states[camera.state] || '카메라 상태 확인 중') + age + perf + inferAge + sourceAge + labels);
+    setText(el.camStatus, (states[camera.state] || '카메라 상태 확인 중') + age + streamError + perf + inferAge + sourceAge + labels);
     setClass(el.camStatus, 'cam-status ' + (camera.state || '') +
       (inference.state === 'error' || inferStale ? ' stale' : ''));
     setAttr(el.camStatus, 'title', camera.error || inference.error || el.camStatus.textContent);

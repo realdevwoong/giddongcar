@@ -22,6 +22,7 @@ class MJPEGCamera:
         self._frame_stamps = deque(maxlen=100)
         self._display_sequence = 0
         self._connected = False
+        self._content_type = ''
         self._last_frame_at = None
         self._error = ''
         self._thread = None
@@ -102,11 +103,13 @@ class MJPEGCamera:
             age = None if self._last_frame_at is None else max(0.0, now - self._last_frame_at)
             if not self.enabled:
                 state = 'disabled'
-            elif age is not None and age <= 2.5:
+            elif self._sequence and age is not None and age <= 2.5:
                 state = 'online'
+            elif self._connected and self._sequence == 0:
+                state = 'waiting'
             elif self._connected:
                 state = 'stale'
-            elif self._sequence:
+            elif self._error:
                 state = 'offline'
             else:
                 state = 'connecting'
@@ -115,13 +118,14 @@ class MJPEGCamera:
                          if self._last_inference_at is not None else None}
             return dict(enabled=self.enabled, state=state, frames=self._sequence,
                         age_s=round(age, 1) if age is not None else None,
-                        error=self._error, inference=inference,
+                        content_type=self._content_type, error=self._error, inference=inference,
                         url=f'/camera/{self.name}.mjpg' if self.enabled else None)
 
-    def _set_connection(self, connected, error=''):
+    def _set_connection(self, connected, error=None):
         with self._lock:
             self._connected = connected
-            self._error = error[:160]
+            if error is not None:
+                self._error = error[:160]
 
     def _publish(self, frame):
         with self._lock:
@@ -164,7 +168,10 @@ class MJPEGCamera:
                 content_type = response.getheader('Content-Type', '').lower()
                 if content_type.startswith('text/html'):
                     raise ValueError('카메라 주소가 MJPEG가 아닌 HTML 페이지를 반환했습니다')
-
+                if content_type and not any(kind in content_type for kind in
+                                            ('multipart/x-mixed-replace', 'multipart/mixed', 'image/jpeg')):
+                    raise ValueError(f'카메라 응답 형식이 MJPEG가 아닙니다: {content_type[:80]}')
+                self._content_type = content_type
                 self._set_connection(True)
                 buffer = b''
                 while not self._stop.is_set():

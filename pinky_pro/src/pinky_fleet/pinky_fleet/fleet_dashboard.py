@@ -3,6 +3,7 @@
 import argparse
 import signal
 import threading
+import time  # compatibility: tests and callers patch dashboard.time.monotonic
 from pathlib import Path
 from http.server import ThreadingHTTPServer
 

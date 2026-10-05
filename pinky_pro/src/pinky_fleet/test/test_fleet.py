@@ -89,6 +89,22 @@ class CameraStreamTests(unittest.TestCase):
         self.assertEqual((frame, sequence), (b'jpeg-frame', 1))
         self.assertEqual(camera.status()['state'], 'disabled')
 
+    def test_camera_status_distinguishes_waiting_from_received_video(self):
+        camera = MJPEGCamera('camera-host', name='robot1')
+        camera._set_connection(True)
+        status = camera.status()
+        self.assertEqual(status['state'], 'waiting')
+        self.assertEqual(status['frames'], 0)
+        camera._publish(b'jpeg-frame')
+        self.assertEqual(camera.status()['state'], 'online')
+
+    def test_camera_connection_error_is_exposed_in_status(self):
+        camera = MJPEGCamera('camera-host', name='robot1')
+        camera._set_connection(False, 'MJPEG 응답 형식 오류')
+        status = camera.status()
+        self.assertEqual(status['state'], 'offline')
+        self.assertEqual(status['error'], 'MJPEG 응답 형식 오류')
+
     def test_overlay_status_keeps_detection_confidence(self):
         camera = MJPEGCamera('camera-host', name='robot1')
         camera.set_inference_state('waiting', 'model.pt')
