@@ -89,6 +89,14 @@ class CameraStreamTests(unittest.TestCase):
         self.assertEqual((frame, sequence), (b'jpeg-frame', 1))
         self.assertEqual(camera.status()['state'], 'disabled')
 
+    def test_ble_reported_camera_url_can_override_port_and_path(self):
+        camera = MJPEGCamera('192.168.0.6', 5000, 'robot1')
+        self.assertTrue(camera.set_stream_url('http://192.168.0.6:8765/camera/stream'))
+        self.assertEqual((camera.host, camera.port, camera.path),
+                         ('192.168.0.6', 8765, '/camera/stream'))
+        self.assertTrue(camera.set_stream_url(':5001'))
+        self.assertEqual((camera.host, camera.port, camera.path), ('192.168.0.6', 5001, '/'))
+
     def test_camera_status_distinguishes_waiting_from_received_video(self):
         camera = MJPEGCamera('camera-host', name='robot1')
         camera._set_connection(True)

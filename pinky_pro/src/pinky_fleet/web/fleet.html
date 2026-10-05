@@ -1691,6 +1691,7 @@ function renderCard(id) {
       offline: 'MJPEG 연결 실패 · 재연결 중', disabled: '카메라 사용 안 함'};
     const age = Number.isFinite(camera.age_s) ? ` · 마지막 영상 ${camera.age_s.toFixed(1)}초 전` : '';
     const streamError = camera.error ? ` · ${camera.error}` : '';
+    const sourceAddress = camera.frames === 0 && camera.source_url ? ` · 주소 ${camera.source_url}` : '';
     const inference = camera.inference || {};
     const found = Array.isArray(inference.detections) ? inference.detections : [];
     const observe = cameraObservation[id];
@@ -1726,7 +1727,7 @@ function renderCard(id) {
     const sourceAge = Number.isFinite(inference.source_age_s) && inference.state === 'online'
       ? ` · 처리 영상 지연 ${inference.source_age_s.toFixed(2)}초` : '';
     const inferStale = Number.isFinite(inference.age_s) && inference.age_s > 2.5;
-    setText(el.camStatus, (states[camera.state] || '카메라 상태 확인 중') + age + streamError + perf + inferAge + sourceAge + labels);
+    setText(el.camStatus, (states[camera.state] || '카메라 상태 확인 중') + age + streamError + sourceAddress + perf + inferAge + sourceAge + labels);
     setClass(el.camStatus, 'cam-status ' + (camera.state || '') +
       (inference.state === 'error' || inferStale ? ' stale' : ''));
     setAttr(el.camStatus, 'title', camera.error || inference.error || el.camStatus.textContent);
@@ -1735,7 +1736,7 @@ function renderCard(id) {
       on: control.running ? '스트리밍 중' : '카메라 켜짐 · 스트림 대기',
       stopping: '카메라 중지 명령 전송 중', error: `카메라 제어 오류: ${control.error || '상태 확인 필요'}`};
     setText(el.camControlStatus, controlStates[control.state] || '카메라 상태 확인 중');
-    setAttr(el.camControlStatus, 'title', control.error || controlStates[control.state] || null);
+    setAttr(el.camControlStatus, 'title', control.error || control.stream_url || controlStates[control.state] || null);
     const busy = cameraPending[id] || control.state === 'starting' || control.state === 'stopping';
     el.camStart.disabled = !control.configured || busy || control.enabled;
     el.camStop.disabled = !control.configured || busy || !control.enabled;

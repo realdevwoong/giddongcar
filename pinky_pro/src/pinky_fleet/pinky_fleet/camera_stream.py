@@ -3,6 +3,7 @@ from http.client import HTTPConnection, HTTPException
 import threading
 import time
 from collections import deque
+from urllib.parse import urlsplit
 
 
 class MJPEGCamera:
@@ -13,6 +14,8 @@ class MJPEGCamera:
     def __init__(self, host, port=5000, name='camera'):
         self.host = host.strip()
         self.port = int(port)
+        self.path = '/'
+        self._connection = None
         self.name = name
         self._lock = threading.Condition()
         self._stop = threading.Event()
@@ -29,6 +32,34 @@ class MJPEGCamera:
         self._inference = dict(state='disabled', model=None, latency_ms=None, labels=[], sequence=0)
         self._inference_times = deque(maxlen=20)
         self._last_inference_at = None
+
+    def set_stream_url(self, url):
+        """Use the stream URL reported by Pinky's BLE camera response when available."""
+        value = str(url or '').strip()
+        if not value:
+            return False
+        if value.startswith(':'):
+            parsed = urlsplit('http://pinky' + value)
+            host = self.host
+        elif value.startswith('/'):
+            parsed = urlsplit(value)
+            host = self.host
+        else:
+            parsed = urlsplit(value if '://' in value else 'http://' + value)
+            host = parsed.hostname or self.host
+        if parsed.scheme not in ('', 'http') or not host:
+            raise ValueError(f'지원하지 않는 카메라 스트림 주소: {value}')
+        port = parsed.port or (self.port if value.startswith('/') else 80)
+        path = parsed.path or '/'
+        if parsed.query:
+            path += '?' + parsed.query
+        with self._lock:
+            changed = (self.host, self.port, self.path) != (host, port, path)
+            self.host, self.port, self.path = host, port, path
+            active = self._connection if changed else None
+        if active:
+            active.close()
+        return changed
 
     @property
     def enabled(self):
@@ -118,6 +149,7 @@ class MJPEGCamera:
                          if self._last_inference_at is not None else None}
             return dict(enabled=self.enabled, state=state, frames=self._sequence,
                         age_s=round(age, 1) if age is not None else None,
+                        source_url=f'http://{self.host}:{self.port}{self.path}',
                         content_type=self._content_type, error=self._error, inference=inference,
                         url=f'/camera/{self.name}.mjpg' if self.enabled else None)
 
@@ -156,9 +188,13 @@ class MJPEGCamera:
         while not self._stop.is_set():
             connection = None
             try:
-                connection = HTTPConnection(self.host, self.port, timeout=4)
-                connection.request('GET', '/', headers={
-                    'Host': self.host,
+                with self._lock:
+                    host, port, path = self.host, self.port, self.path
+                connection = HTTPConnection(host, port, timeout=4)
+                with self._lock:
+                    self._connection = connection
+                connection.request('GET', path, headers={
+                    'Host': host,
                     'Accept': 'multipart/x-mixed-replace, image/jpeg, */*',
                     'Connection': 'keep-alive',
                 })
@@ -167,7 +203,7 @@ class MJPEGCamera:
                     raise ConnectionError(f'카메라 HTTP 응답: {response.status} {response.reason}')
                 content_type = response.getheader('Content-Type', '').lower()
                 if content_type.startswith('text/html'):
-                    raise ValueError('카메라 주소가 MJPEG가 아닌 HTML 페이지를 반환했습니다')
+                    raise ValueError(f'{host}:{port}{path}에서 HTML 응답을 받았습니다. MJPEG 주소/포트를 확인하세요')
                 if content_type and not any(kind in content_type for kind in
                                             ('multipart/x-mixed-replace', 'multipart/mixed', 'image/jpeg')):
                     raise ValueError(f'카메라 응답 형식이 MJPEG가 아닙니다: {content_type[:80]}')
@@ -190,4 +226,7 @@ class MJPEGCamera:
             finally:
                 if connection:
                     connection.close()
+                with self._lock:
+                    if self._connection is connection:
+                        self._connection = None
         self._set_connection(False)

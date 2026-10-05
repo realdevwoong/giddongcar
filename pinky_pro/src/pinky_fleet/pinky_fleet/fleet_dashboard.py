@@ -62,7 +62,7 @@ def main():
             robots[name] = Robot(name, domain, args.use_sim_time, name in args.known_pose, args.auto_spin)
             cameras[name] = MJPEGCamera(getattr(args, f'{name}_camera_host'), args.camera_port, name)
             cameras[name].start()
-            camera_controls[name] = PinkyCameraControl(getattr(args, f'{name}_camera_host'), name)
+            camera_controls[name] = PinkyCameraControl(getattr(args, f'{name}_camera_host'), name, cameras[name])
         fleet = Fleet(robots, zones, cameras, camera_controls)
         model_path = Path(get_package_share_directory('pinky_fleet')) / 'models' / 'yolo11n.pt'
         perception = YOLOPerception(cameras, str(model_path))

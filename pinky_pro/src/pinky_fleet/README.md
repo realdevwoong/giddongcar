@@ -60,9 +60,9 @@ ROS_DOMAIN_ID=17 ros2 run tf2_ros tf2_echo map base_link
 
 ## 카메라 영상
 
-Pinky Pro 카메라는 로봇 이미지 `pinky_pro_v1.9` 이상에서 BLE 명령으로 시작·중지할 수 있습니다. 대시보드 로봇 카드의 **카메라 시작/중지** 버튼을 누르면 PC가 BLE로 로봇을 찾고, 로봇이 응답한 IP로 대상을 확인한 뒤 명령을 보냅니다. PC Bluetooth가 켜져 있어야 하며, 카메라 영상은 로봇 IP의 HTTP MJPEG 서버 `:5000/`에서 받습니다.
+Pinky Pro 카메라는 로봇 이미지 `pinky_pro_v1.9` 이상에서 BLE 명령으로 시작·중지할 수 있습니다. 대시보드 로봇 카드의 **카메라 시작/중지** 버튼을 누르면 PC가 BLE로 로봇을 찾고, 로봇이 응답한 IP로 대상을 확인한 뒤 명령을 보냅니다. PC Bluetooth가 켜져 있어야 하며, 카메라 스트림 주소는 BLE `camera_result`가 반환하면 그 주소를 우선 사용하고, 반환 주소가 없을 때만 기본 `:5000/`을 시도합니다.
 
-`start_fleet.sh`는 `~/.config/pinky_fleet.env`의 `ROBOT1_IP`, `ROBOT2_IP`를 카메라 주소로 쓰며, 기본 포트는 `5000`입니다.
+`start_fleet.sh`는 `~/.config/pinky_fleet.env`의 `ROBOT1_IP`, `ROBOT2_IP`를 카메라 주소로 쓰며, 주소를 돌려받지 못한 경우의 기본 포트는 `5000`입니다.
 
 ```bash
 ros2 launch pinky_fleet multi_robot.launch.py \
@@ -90,7 +90,7 @@ PYTHONPATH="$PWD/.venv/lib/python3.12/site-packages${PYTHONPATH:+:$PYTHONPATH}" 
 
 실물 관제는 `scripts/start_fleet.sh`가 이 venv를 ROS Python import 경로에 자동으로 추가합니다. 직접 `ros2 launch`할 때는 위의 `PYTHONPATH` 설정을 같은 터미널에서 먼저 실행해야 합니다. `.pt` 가중치는 대용량 모델 파일이므로 Git에는 넣지 않습니다. 고정 경로에 가중치가 없으면 Ultralytics가 `YOLO('yolo11n.pt')` 로딩 중 공식 배포처에서 자동으로 내려받습니다. 첫 다운로드에는 인터넷 연결이 필요합니다. 다운로드나 모델 초기화에 실패해도 카메라 원본 영상과 Nav2 실행은 계속되며 YOLO 상태에 오류가 표시됩니다.
 
-스트림을 시작한 뒤 영상이 안 나오면 로봇에서 `sudo ss -ltnp | grep ':5000'`으로 서버가 열렸는지 확인합니다. 포트 `8888`은 Jupyter용이며 카메라는 `5000`을 사용합니다. 영상 표시는 로봇 구동 명령을 보내지 않습니다.
+스트림을 시작한 뒤 영상이 안 나오면 로봇에서 `sudo ss -ltnp | grep ':5000'`으로 서버가 열렸는지 확인합니다. 이전에 확인한 로봇의 Jupyter 포트는 `8888`이었지만, 현재 로봇의 `:5000/`이 HTML을 반환한다면 그 주소는 MJPEG가 아닙니다. 대시보드는 오류와 실제 접속 주소를 표시하며 BLE 응답의 스트림 URL을 우선 반영합니다. 영상 표시는 로봇 구동 명령을 보내지 않습니다.
 
 ## 실행 (Gazebo, 로봇 2대)
 

@@ -23,9 +23,11 @@ class _CameraCommandError(RuntimeError):
 class PinkyCameraControl:
     """Find the Pinky by its reported WiFi IP, then control its camera over BLE."""
 
-    def __init__(self, host, name='camera'):
+    def __init__(self, host, name='camera', camera=None):
         self.host = host.strip()
         self.name = name
+        self.camera = camera
+        self._stream_url = ''
         self.address = None
         self._lock = threading.Lock()
         self._enabled = False
@@ -36,7 +38,7 @@ class PinkyCameraControl:
     def status(self):
         with self._lock:
             return dict(configured=bool(self.host), state=self._state,
-                        enabled=self._enabled, running=self._running, error=self._error)
+                        enabled=self._enabled, running=self._running, error=self._error, stream_url=self._stream_url)
 
     def request(self, enabled):
         if not self.host:
@@ -55,9 +57,17 @@ class PinkyCameraControl:
                 self._error = message[:160]
             LOGGER.error('%s 카메라 BLE 제어 실패 (%s): %s', self.name, self.host, message)
             raise ValueError(self._error) from exc
+        stream_url = str(result.get('url') or '').strip()
+        if enabled and stream_url and self.camera:
+            try:
+                self.camera.set_stream_url(stream_url)
+            except ValueError as exc:
+                LOGGER.warning('%s 로봇이 반환한 카메라 주소를 적용하지 못함: %s', self.name, exc)
+                stream_url = ''
         with self._lock:
             self._enabled = bool(result.get('enabled', enabled))
             self._running = bool(result.get('running', False))
+            self._stream_url = stream_url or self._stream_url
             self._state = 'on' if self._enabled else 'off'
             self._error = ''
         LOGGER.info('%s 카메라 BLE %s 완료: %s', self.name,
