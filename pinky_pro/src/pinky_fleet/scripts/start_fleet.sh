@@ -9,7 +9,8 @@
 #   ROBOT2_DOMAIN=17        # 생략하면 17
 #   FLEET_PORT=8081         # 생략하면 8080
 #   카메라 주소는 각 ROBOT*_IP, YOLO 모델은 pinky_fleet/models/yolo11n.pt를 쓴다.
-#   대시보드에서 BLE로 카메라를 시작/중지한다(로봇 이미지 v1.9+, PC Bluetooth 필요).
+#   로봇 BLE 서비스가 set_camera를 지원해야 한다(PC Bluetooth 필요).
+#   unknown cmd: set_camera면 로봇의 /opt/pinky-ble/ble_server.py를 갱신하고 서비스를 재시작한다.
 #   스트림 기본 포트는 5000.
 #   카메라 포트만 다르면 launch 인자로 바꾼다: start_fleet.sh camera_port:=5001
 #

@@ -60,27 +60,52 @@ ROS_DOMAIN_ID=17 ros2 run tf2_ros tf2_echo map base_link
 
 ## 카메라 영상
 
-Pinky Pro 카메라는 로봇 이미지 `pinky_pro_v1.9` 이상에서 BLE 명령으로 시작·중지할 수 있습니다. 대시보드 로봇 카드의 **카메라 시작/중지** 버튼을 누르면 PC가 BLE로 로봇을 찾고, 로봇이 응답한 IP로 대상을 확인한 뒤 명령을 보냅니다. PC Bluetooth가 켜져 있어야 하며, 카메라 스트림 주소는 BLE `camera_result`가 반환하면 그 주소를 우선 사용하고, 반환 주소가 없을 때만 기본 `:5000/`을 시도합니다. Pinky Studio와 관제는 카메라 영상을 동시에 받을 수 없으므로, 관제 사용 중에는 Studio의 영상 창을 닫아야 합니다.
+카메라를 제어하려면 **각 로봇의 BLE 서비스가 `status`와 `set_camera` 명령을 지원해야** 합니다. PC Bluetooth가 켜져 있어야 하며, 저장소 루트의 `.venv`에 설치한 `bleak`을 사용합니다. 대시보드의 **카메라 시작/중지** 버튼은 BLE에서 Pinky를 찾고 응답 IP가 설정한 로봇 IP와 맞는지 확인한 뒤 명령을 보냅니다. 스트림 주소는 BLE 응답 URL을 우선 사용하고, 응답에 주소가 없을 때만 `http://<로봇IP>:5000/`을 기본값으로 사용합니다.
 
-`start_fleet.sh`는 `~/.config/pinky_fleet.env`의 `ROBOT1_IP`, `ROBOT2_IP`를 카메라 주소로 쓰며, 주소를 돌려받지 못한 경우의 기본 포트는 `5000`입니다.
+로봇의 BLE 서버 파일(`/opt/pinky-ble/ble_server.py`)은 이 저장소에 포함되지 않으며, 로봇마다 별도로 설치·관리합니다. 두 로봇 모두 카메라 제어가 가능한 같은 버전의 서비스를 실행해야 합니다. `unknown cmd: set_camera`는 해당 로봇의 BLE 서비스가 구버전이라는 뜻이므로, 그 로봇의 서비스를 갱신하고 재시작하세요.
+
+로봇 카메라는 한 프로그램만 점유할 수 있으므로 대시보드에서 켜기 전에 Pinky Studio의 영상 창을 닫으세요. 대시보드는 로봇별 영상 스트림을 한 번만 받고, 여러 브라우저 창은 대시보드가 보관한 최신 프레임을 공유합니다.
+
+실물 PC의 IP와 주행 설정은 기본적으로 `~/.config/pinky_fleet.env`에 둡니다. 이 파일은 Git에 올리지 않습니다. 다른 설정 파일은 `PINKY_FLEET_ENV=/경로/파일`로 지정할 수 있습니다. `ROBOT1_IP`와 `ROBOT2_IP` 값은 DDS peer와 카메라 주소에 사용됩니다.
+
+| 설정 | 기본값 | 설명 |
+|---|---:|---|
+| `ROBOT1_IP`, `ROBOT2_IP` | 필수 | 각 로봇의 Wi-Fi IP |
+| `ROBOT1_DOMAIN`, `ROBOT2_DOMAIN` | `15`, `17` | 각 로봇의 ROS 2 도메인 |
+| `FLEET_PORT` | `8080` | 대시보드 포트 |
+| `robot1_camera_host`, `robot2_camera_host` | 각 로봇 IP | 영상 연결 주소. 비우면 해당 카메라를 사용하지 않음 |
+| `camera_port` | `5000` | BLE 응답에 URL이 없을 때 쓰는 기본 카메라 포트 |
+| `host` | `127.0.0.1` | 대시보드 bind 주소. 기본값은 PC 내부에서만 접속 가능 |
+| `map`, `params_file` | 패키지 기본 지도·Nav2 설정 | 지도 파일과 Nav2 파라미터 |
+| `robot1_initial_pose`, `robot2_initial_pose` | 비어 있음 | 초기 위치 `x,y,yaw` |
+| `auto_spin` | `true` | 위치를 모를 때 로봇이 자동으로 한 바퀴 돌아 위치를 찾음 |
+| `traffic_zones` | good3 구역 파일 | 로봇 간 교통 정리 구역. `traffic_zones:=`로 끌 수 있음 |
+
+`start_fleet.sh`의 설정은 실행 시 launch 인자로 덮어쓸 수 있습니다.
 
 ```bash
 ros2 launch pinky_fleet multi_robot.launch.py \
   robot1_camera_host:=<로봇1주소> robot2_camera_host:=<로봇2주소> camera_port:=5000
 ```
 
-대시보드 각 로봇 카드에서 스트리밍을 켜고 영상·연결 상태를 확인할 수 있습니다. `start_fleet.sh` 실행은 `~/.config/pinky_fleet.env`의 `ROBOT1_IP`, `ROBOT2_IP` 주소를 사용합니다. YOLO는 패키지의 고정 경로 `pinky_fleet/models/yolo11n.pt`에서 자동으로 읽습니다.
+예: `fleet auto_spin:=false camera_port:=5001`. 일반 실행은 [실물 실행 안내](../../../docs/real.md)의 설정 파일과 `fleet` alias를 사용하면 됩니다.
+
+카드를 통해 카메라를 켜면 대시보드가 로봇별 스트림을 한 번만 받고, 브라우저는 대시보드의 `/camera/robot1.jpg` 또는 `/camera/robot2.jpg`에서 약 150 ms 간격으로 최신 JPEG를 가져옵니다. 상태 줄의 `브라우저 표시 WxH`는 브라우저가 프레임을 디코딩했다는 뜻입니다. 영상 수신 상태와 브라우저 표시 상태를 따로 확인할 수 있습니다.
+
+YOLO는 패키지의 고정 모델 경로 `pinky_fleet/models/yolo11n.pt`를 사용하며 실행 시 GPU가 있으면 Ultralytics가 자동으로 선택합니다. 모델 가중치가 없으면 첫 실행 때 인터넷에서 자동으로 내려받습니다. 차선·횡단보도 전용 모델은 아니며, YOLO 결과는 주행 명령에 연결되지 않습니다.
 
 
-YOLO와 GPU용 PyTorch 설치는 저장소 루트에서 한 번 실행합니다. 시스템 ROS Python과 패키지를 분리하면서 ROS 패키지에 접근할 수 있도록 `--system-site-packages` venv를 사용합니다.
+YOLO, CUDA용 PyTorch, BLE 라이브러리는 저장소 루트에서 한 번 설치합니다. ROS Python과 패키지를 공유하도록 `--system-site-packages` 가상환경을 사용합니다. 아래 CUDA 13.0 설치 명령은 현재 관제 PC에서 확인한 조합입니다. 다른 PC에서는 [PyTorch 설치 선택기](https://pytorch.org/get-started/locally/)에서 OS·pip·Python·CUDA를 선택해 해당 명령을 쓰세요.
 
 ```bash
 cd ~/Desktop/giddongcar
 python3 -m venv --system-site-packages .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
 .venv/bin/python -m pip install ultralytics bleak
 ```
 
-가상환경은 CUDA 지원 PyTorch 등 용량이 큰 패키지를 설치합니다. GPU 사용 가능 여부는 아래처럼 확인할 수 있습니다.
+GPU 사용 가능 여부와 설치 버전은 아래처럼 확인합니다. `CUDA 사용 가능: True`면 GPU 가속이 가능합니다.
 
 ```bash
 source /opt/ros/jazzy/setup.bash
@@ -88,9 +113,15 @@ PYTHONPATH="$PWD/.venv/lib/python3.12/site-packages${PYTHONPATH:+:$PYTHONPATH}" 
   python3 -c "import torch, ultralytics; print('Ultralytics', ultralytics.__version__); print('PyTorch', torch.__version__); print('CUDA 사용 가능:', torch.cuda.is_available())"
 ```
 
-실물 관제는 `scripts/start_fleet.sh`가 이 venv를 ROS Python import 경로에 자동으로 추가합니다. 직접 `ros2 launch`할 때는 위의 `PYTHONPATH` 설정을 같은 터미널에서 먼저 실행해야 합니다. `.pt` 가중치는 대용량 모델 파일이므로 Git에는 넣지 않습니다. 고정 경로에 가중치가 없으면 Ultralytics가 `YOLO('yolo11n.pt')` 로딩 중 공식 배포처에서 자동으로 내려받습니다. 첫 다운로드에는 인터넷 연결이 필요합니다. 다운로드나 모델 초기화에 실패해도 카메라 원본 영상과 Nav2 실행은 계속되며 YOLO 상태에 오류가 표시됩니다.
+실물 관제는 `scripts/start_fleet.sh`가 venv 경로를 ROS Python에 자동으로 추가합니다. 직접 `ros2 launch`할 때는 위의 `PYTHONPATH` 설정을 같은 터미널에서 먼저 실행해야 합니다. `.pt` 가중치는 대용량 파일이므로 Git에 넣지 않습니다. 가중치가 없으면 Ultralytics가 `YOLO('yolo11n.pt')` 로딩 중 자동으로 내려받습니다. 첫 다운로드에는 인터넷이 필요합니다. 다운로드나 모델 초기화에 실패해도 카메라와 Nav2는 계속 실행되며 YOLO 상태에 오류가 표시됩니다.
 
-스트림을 시작한 뒤 영상이 안 나오면 로봇에서 `sudo ss -ltnp | grep ':5000'`으로 서버가 열렸는지 확인합니다. 이전에 확인한 로봇의 Jupyter 포트는 `8888`이었지만, `:5000/`이 `<img src="/snapshot?...">`가 있는 Pinky 카메라 뷰어 HTML을 반환하는 것은 정상이며, 대시보드는 페이지의 `/snapshot` JPEG 요청을 반복해 영상을 받습니다. 다른 HTML이면 스트림 주소가 잘못된 것입니다. Jupyter는 이전 확인에서 `8888`을 사용했습니다. 대시보드는 실제 접속 주소와 오류를 표시하고 BLE 응답 URL을 우선 사용합니다. 영상 표시는 로봇 구동 명령을 보내지 않습니다.
+### 문제 확인
+
+- `unknown cmd: set_camera`: 해당 로봇의 BLE 서비스가 카메라 제어를 지원하지 않습니다. `/opt/pinky-ble/ble_server.py`를 카메라 지원 버전으로 갱신하고 BLE 서비스를 재시작하세요.
+- `카메라 꺼짐` 또는 `Connection refused`: BLE 시작 응답과 대시보드에 표시된 로봇 주소를 확인하고, 기본 포트를 쓰는 경우 로봇에서 `sudo ss -ltnp | grep ':5000'`을 확인하세요. BLE 응답이 별도 주소를 반환하면 그 주소가 우선입니다.
+- `영상 수신 중`인데 브라우저 표시 크기가 안 뜸: 대시보드 JPEG 요청이나 브라우저 디코딩 문제입니다. `브라우저 이미지 디코딩 실패`가 표시되면 JPEG 응답을 확인하세요.
+- `:5000/`이 `<img src="/snapshot?...">`가 포함된 HTML을 반환하는 것은 정상일 수 있으며, 대시보드는 해당 `/snapshot`에서 JPEG를 받습니다. 이 로봇에서 확인한 Jupyter 포트는 `8888`입니다.
+- 카메라와 YOLO는 관측 기능이며 로봇 이동·정지·속도 명령을 보내지 않습니다.
 
 ## 실행 (Gazebo, 로봇 2대)
 

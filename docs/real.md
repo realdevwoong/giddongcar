@@ -40,12 +40,15 @@ timedatectl                                   # "System clock synchronized: yes"
 
 ```bash
 cat > ~/.config/pinky_fleet.env <<'CONF'      # 이 PC 전용. git에 안 올린다
-ROBOT1_IP=192.168.0.<로봇1>
-ROBOT2_IP=192.168.0.<로봇2>
+# 현재 공유기에서 확인한 IP. DHCP 예약 변경 시 여기를 함께 수정한다.
+ROBOT1_IP=192.168.0.6
+ROBOT2_IP=192.168.0.8
 FLEET_PORT=8080                               # 8080을 다른 프로그램(Docker 등)이 쓰면 8081
 CONF
 echo "alias fleet='~/giddongcar/pinky_pro/src/pinky_fleet/scripts/start_fleet.sh'" >> ~/.bashrc
 ```
+
+`ROBOT1_IP`와 `ROBOT2_IP`는 필수입니다. 같은 값을 카메라 기본 주소와 DDS peer 설정에도 사용합니다. 설정 파일을 다른 위치에 둘 때는 `export PINKY_FLEET_ENV=/절대경로/파일`을 실행한 다음 `fleet`를 호출합니다. 실행 인자로 도메인이나 포트 등을 한 번만 바꾸려면 `fleet robot1_domain:=15 robot2_domain:=17 port:=8081 camera_port:=5001` 형식으로 넘깁니다. `FLEET_PORT`는 스크립트의 `port` launch 인자에 연결됩니다.
 
 ### 매번
 
@@ -98,7 +101,7 @@ fleet                                         # launch 인자는 뒤에 붙인�
 3. **안전 연습.** 로봇을 움직이기 전에 0 속도 발행(아래)을 한 번 해 본다. 주행 중에는 한 사람이 그 터미널 앞에 있는다.
 4. **첫 목표.** 관제 화면에 로봇 2대가 뜨고, 목표 하나씩 도착하면 첫날 목표 달성. 좁은 통로에는 한 대씩 보낸다.
 5. **주행 보정.** 미끄러짐·라이다 노이즈·WiFi 지연 때문에 속도 상한, footprint, inflation을 조정한다. 팀용 복사본 `pinky_fleet/params/nav2_params.yaml`(관제 기본값)을 고친다. 바꾼 곳은 "팀:" 주석으로 남긴다(지금: 좁은 문에서 collision ahead 오판을 줄인 `failure_tolerance`, `max_allowed_time_to_collision_up_to_carrot`, 문을 나오며 코너를 질러 문틀에 붙지 않게 한 `min_lookahead_dist`, `use_regulated_linear_velocity_scaling`).
-6. **카메라.** PC Bluetooth를 켜고, 대시보드 로봇 카드의 카메라 시작/중지 버튼을 쓴다. 관제가 BLE에서 Pinky를 찾아 응답 IP가 설정한 로봇 주소와 일치하는지 확인한 뒤 스트리밍을 제어한다. 로봇 이미지는 `pinky_pro_v1.9` 이상이어야 하며, 영상 주소는 BLE 카메라 응답 URL을 우선 사용하고, 응답에 주소가 없을 때만 `:5000/`을 시도한다. YOLO 가중치는 `pinky_fleet/models/yolo11n.pt`에서 자동으로 읽는다. COCO 모델 결과는 화면 확인용이고 주행에 반영되지 않는다. 차선·횡단보도는 실물 영상으로 별도 데이터·모델을 검증한다. 가중치 파일은 Git에 올리지 않는다. 상세 작업 목록은 [카메라·인식 기획](real_camera_yolo_plan.md).
+6. **카메라.** PC Bluetooth와 `.venv`의 `bleak` 설치를 확인하고, 각 로봇의 BLE 서비스가 `set_camera`를 지원하는지 확인한다. 대시보드의 시작/중지 버튼은 BLE에서 로봇을 찾고 응답 IP가 `ROBOT1_IP`/`ROBOT2_IP`와 일치하는지 검사한다. `unknown cmd: set_camera`면 해당 로봇의 `/opt/pinky-ble/ble_server.py`가 구버전이므로 카메라 지원 버전으로 갱신하고 서비스를 재시작한다. BLE 응답 URL이 있으면 그 주소를 쓰고, 없을 때만 설정한 카메라 포트(기본 `5000`)를 쓴다. 시작 전에 Pinky Studio의 영상 창을 닫는다. 관제는 로봇별 스트림을 하나만 받아 여러 브라우저 화면에 공유한다. 영상 상태 줄의 `브라우저 표시 WxH`까지 확인한다. YOLO 가중치는 `pinky_fleet/models/yolo11n.pt`에서 자동으로 읽고, 현재 결과는 화면 확인용이라 주행에는 반영되지 않는다. 차선·횡단보도는 별도 데이터·모델 검증이 필요하다. 가중치 파일은 Git에 올리지 않는다. 상세 절차는 [카메라 실행·설정](../pinky_pro/src/pinky_fleet/README.md#카메라-영상)과 [카메라·인식 기획](real_camera_yolo_plan.md).
 
 시뮬로는 못 잡는 것: WiFi 끊김·공유기 과부하·DDS 발견 실패, 실제 충돌과 배터리, 조명에 따른 탐지 성능.
 
