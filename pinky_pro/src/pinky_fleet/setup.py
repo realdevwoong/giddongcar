@@ -29,6 +29,7 @@ setup(
         'console_scripts': [
             'fleet_dashboard = pinky_fleet.fleet_dashboard:main',
             'sim_lamp = pinky_fleet.sim_lamp:main',
+            'vision_drive = pinky_fleet.vision_drive:main',
         ],
     },
 )
