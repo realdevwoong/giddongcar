@@ -15,6 +15,10 @@ ros2 run pinky_driving tape_lane_drive --robot-ip 192.168.0.6 --mode observe
 
 로봇2는 IP를 `192.168.0.8`, ROS domain을 `17`로 바꿉니다. Pinky Studio 및 대시보드 카메라 스트림은 끄고 실행하세요. 관찰 창은 흰색 마스크, 좌우 직선, 중앙 경로, 검출 신뢰도와 중심 오차를 표시합니다. `s`는 원본/오버레이/흰색 마스크/설정 JSON을 `~/vision_drive_observations`에 저장하고, `q` 또는 Ctrl+C는 종료합니다.
 
+### 학습용 사진 연속 저장
+
+텔레옵으로 코스를 천천히 돌면서 관찰 창에서 `r`을 누르면, 원본 프레임을 `--capture-interval` 간격(기본 0.5초)으로 `~/vision_drive_observations/dataset_<시각>/frame_00001.jpg`부터 계속 저장합니다. 화면에 `REC <장수>`가 표시되고, `r`을 다시 누르면 멈춥니다. 차선 인식 결과와 관계없이 원본만 저장하므로 YOLO segmentation 라벨링(`driveable_area`, `crosswalk`)에 바로 쓸 수 있습니다.
+
 ### 현장 영상에 맞춰 조정
 
 | 인자 | 기본값 | 용도 |

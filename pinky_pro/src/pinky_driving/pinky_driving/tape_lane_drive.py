@@ -48,6 +48,8 @@ def parse_args():
     parser.add_argument('--confirm-supervised-test', action='store_true')
     parser.add_argument('--watchdog-verified', action='store_true')
     parser.add_argument('--output-dir', default='~/vision_drive_observations')
+    parser.add_argument('--capture-interval', type=float, default=0.5,
+                        help='r 키 학습용 연속 저장 간격 초')
     parser.add_argument('--headless', action='store_true')
     return parser.parse_args()
 
@@ -309,6 +311,8 @@ def main():
         raise SystemExit('white-value와 max-saturation은 0~255 범위여야 합니다.')
     if not 0.05 <= args.roi_top < 0.9:
         raise SystemExit('roi-top은 0.05 이상 0.9 미만이어야 합니다.')
+    if args.capture_interval <= 0:
+        raise SystemExit('capture-interval은 0보다 커야 합니다.')
     if not 0.05 <= args.lane_width_min < args.lane_width_max <= 1.0:
         raise SystemExit('lane-width-min/max 비율을 확인하세요.')
     if args.mode == 'drive':
@@ -354,6 +358,9 @@ def main():
         last_logged_policy = None
         last_detection_log_at = 0.0
         last_detection_log_state = None
+        capture_dir = None
+        capture_count = 0
+        last_capture_at = 0.0
         while rclpy.ok():
             rclpy.spin_once(node, timeout_sec=0.0)
             frame_bytes, sequence = camera.latest()
@@ -385,6 +392,15 @@ def main():
                     else:
                         display_status = 'STOP: NO LANE PAIR'
                     _overlay_status(current_overlay, display_status, lane.valid)
+                    # Raw frames only: labels for training are drawn later in a labeling tool.
+                    if (capture_dir is not None
+                            and last_frame_at - last_capture_at >= args.capture_interval):
+                        capture_count += 1
+                        cv2.imwrite(str(capture_dir / f'frame_{capture_count:05d}.jpg'), frame)
+                        last_capture_at = last_frame_at
+                    if capture_dir is not None:
+                        cv2.putText(current_overlay, f'REC {capture_count}', (8, 44),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 0, 255), 2, cv2.LINE_AA)
                     detection_state = (lane.valid, lane.reason)
                     if (detection_state != last_detection_log_state
                             or time.monotonic() - last_detection_log_at >= 1.0):
@@ -436,10 +452,22 @@ def main():
             if not args.headless and current_overlay is not None:
                 if last_frame_at is None or time.monotonic() - last_frame_at > 0.5:
                     _overlay_status(current_overlay, 'STOP: CAMERA STALE', False)
-                cv2.imshow('Pinky white-tape lane (q quit, s save)', current_overlay)
+                cv2.imshow('Pinky white-tape lane (q quit, s save, r record)', current_overlay)
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):
                     break
+                if key == ord('r'):
+                    if capture_dir is None:
+                        stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                        capture_dir = Path(args.output_dir).expanduser() / f'dataset_{stamp}'
+                        capture_dir.mkdir(parents=True, exist_ok=True)
+                        capture_count = 0
+                        last_capture_at = 0.0
+                        LOGGER.info('학습용 연속 저장 시작: %s (%.1f초 간격, r로 종료)',
+                                    capture_dir, args.capture_interval)
+                    else:
+                        LOGGER.info('학습용 연속 저장 종료: %s (%d장)', capture_dir, capture_count)
+                        capture_dir = None
                 if key == ord('s') and current_frame is not None:
                     output_dir = Path(args.output_dir).expanduser()
                     output_dir.mkdir(parents=True, exist_ok=True)
