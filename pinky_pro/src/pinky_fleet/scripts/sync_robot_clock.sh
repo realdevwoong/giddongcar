@@ -7,7 +7,11 @@
 #   예: sync_robot_clock.sh 192.168.0.6 15 192.168.0.8 17
 # 필요: 로봇에서 bringup(라이다)이 돌고 있고, 이 터미널에서 ROS_STATIC_PEERS로 로봇이 보일 것.
 set -u
+
+# ROS setup hooks read optional variables that may be unset.
+set +u
 source /opt/ros/jazzy/setup.bash
+set -u
 
 measure() {   # PC 시각 - 로봇이 찍은 시각 [초]. 못 재면 빈 문자열
     ROS_DOMAIN_ID=$1 timeout 20 ros2 topic delay /scan --window 10 2>/dev/null \
