@@ -222,6 +222,9 @@ def main():
     control = PinkyCameraControl(args.robot_ip, name='vision_drive', camera=camera)
     node = None
     camera_started = False
+    # Defined before try: the finally block uses them even if startup checks fail.
+    video_writers = None
+    recording_stem = None
     try:
         rclpy.init()
         node = VisionDriveNode(args.mode)
@@ -246,8 +249,6 @@ def main():
         last_frame = None
         last_detections = []
         last_latency_ms = None
-        video_writers = None
-        recording_stem = None
         current_command = (0.0, 0.0, '초기화')
         last_control_at = 0.0
         device = None if args.device == 'auto' else args.device
