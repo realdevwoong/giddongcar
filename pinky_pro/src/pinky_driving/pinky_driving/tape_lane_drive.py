@@ -334,7 +334,12 @@ def main():
         LOGGER.info('흰 테이프 차선 관찰 시작: %s (mode=%s)', args.robot_ip, args.mode)
         print(control.request(True))
         if args.mode == 'drive':
-            time.sleep(2.0)
+            # Spin while waiting so /scan callbacks run; at least 2 s for discovery.
+            started_wait = time.monotonic()
+            while time.monotonic() - started_wait < 5.0:
+                rclpy.spin_once(node, timeout_sec=0.1)
+                if time.monotonic() - started_wait >= 2.0 and node.front_range() is not None:
+                    break
             if node.has_other_cmd_vel_publishers():
                 raise RuntimeError('다른 /cmd_vel 발행자가 있습니다. Nav2/대시보드를 중지하세요.')
             if node.front_range() is None:
