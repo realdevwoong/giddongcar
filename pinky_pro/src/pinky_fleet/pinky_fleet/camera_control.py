@@ -23,9 +23,11 @@ class _CameraCommandError(RuntimeError):
 class PinkyCameraControl:
     """Find the Pinky by its reported WiFi IP, then control its camera over BLE."""
 
-    def __init__(self, host, name='camera', camera=None):
+    def __init__(self, host, name='camera', camera=None, ble_name=''):
         self.host = host.strip()
         self.name = name
+        # Robots on different routers can share an IP; the BLE name pins one robot.
+        self.ble_name = (ble_name or '').strip()
         self.camera = camera
         self._stream_url = ''
         self.address = None
@@ -100,11 +102,16 @@ class PinkyCameraControl:
                 manufacturer_names = [bytes(value).decode('ascii', errors='ignore')
                                       for value in advertisement.manufacturer_data.values()]
                 service_uuids = [str(value).lower() for value in (advertisement.service_uuids or [])]
-                if (device_name.lower().startswith('pinky_')
+                if self.ble_name:
+                    if self.ble_name in (device_name, *manufacturer_names):
+                        devices.append((device.address, device_name))
+                elif (device_name.lower().startswith('pinky_')
                         or any(value.lower().startswith('pinky_') for value in manufacturer_names)
                         or SERVICE_UUID in service_uuids):
                     devices.append((device.address, device_name))
         if not devices:
+            if self.ble_name:
+                raise RuntimeError(f'BLE에서 {self.ble_name}을(를) 찾지 못했습니다. 로봇 전원과 이름을 확인하세요.')
             raise RuntimeError('BLE에서 Pinky를 찾지 못했습니다. 로봇 전원과 BLE 연결을 확인하세요.')
         LOGGER.info('%s BLE Pinky 검색 완료: %d대', self.name, len(devices))
 

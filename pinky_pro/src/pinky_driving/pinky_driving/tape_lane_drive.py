@@ -26,6 +26,8 @@ def parse_args():
         description='Pinky 카메라의 흰 테이프 차선 관찰 및 감독형 추종 실험')
     parser.add_argument('--robot-ip', required=True, help='로봇 Wi-Fi IP (예: 192.168.0.6)')
     parser.add_argument('--camera-port', type=int, default=5000)
+    parser.add_argument('--ble-name', default='',
+                        help='카메라를 켤 로봇의 BLE 이름 (예: pinky_6422). 같은 IP 로봇이 여럿일 때 지정')
     parser.add_argument('--mode', choices=('observe', 'drive'), default='observe')
     parser.add_argument('--white-value', type=int, default=165,
                         help='흰 테이프 최소 HSV 밝기 (0-255)')
@@ -323,7 +325,8 @@ def main():
     lane = TapeLaneModel(args.white_value, args.max_saturation, args.roi_top,
                          args.lane_width_min, args.lane_width_max)
     camera = MJPEGCamera(args.robot_ip, args.camera_port, name='tape_lane_drive')
-    control = PinkyCameraControl(args.robot_ip, name='tape_lane_drive', camera=camera)
+    control = PinkyCameraControl(args.robot_ip, name='tape_lane_drive', camera=camera,
+                                 ble_name=args.ble_name)
     node = None
     camera_started = False
     try:

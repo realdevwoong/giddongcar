@@ -33,6 +33,8 @@ def parse_args():
         description='Pinky 카메라/YOLO 인식과 감독형 차선 주행 실험')
     parser.add_argument('--robot-ip', required=True, help='로봇 Wi-Fi IP (예: 192.168.0.6)')
     parser.add_argument('--camera-port', type=int, default=5000)
+    parser.add_argument('--ble-name', default='',
+                        help='카메라를 켤 로봇의 BLE 이름 (예: pinky_6422). 같은 IP 로봇이 여럿일 때 지정')
     parser.add_argument('--model', required=True, help='학습한 Ultralytics segmentation .pt 파일 경로')
     parser.add_argument('--device', default='auto', help='Ultralytics 장치: auto, cpu, 0 등')
     parser.add_argument('--driveable-class', default='driveable_area',
@@ -219,7 +221,8 @@ def main():
     model = YOLO(str(model_path))
     LOGGER.info('YOLO 모델 로드 완료: %s', model.names)
     camera = MJPEGCamera(args.robot_ip, args.camera_port, name='vision_drive')
-    control = PinkyCameraControl(args.robot_ip, name='vision_drive', camera=camera)
+    control = PinkyCameraControl(args.robot_ip, name='vision_drive', camera=camera,
+                                 ble_name=args.ble_name)
     node = None
     camera_started = False
     # Defined before try: the finally block uses them even if startup checks fail.
