@@ -31,3 +31,15 @@ log/
 *_ed25519
 credentials.json
 secrets.yaml
+
+
+# Model weights are kept locally and are not committed.
+pinky_pro/src/pinky_fleet/models/*.pt
+/pinky_pro/src/pinky_fleet/models/duckietown_lane_pose/*_statedict
+
+# Local YOLO runtime environment (GPU PyTorch dependencies).
+.venv/
+
+# Root level scratch colcon artifacts from an older workspace
+/build/
+/install/

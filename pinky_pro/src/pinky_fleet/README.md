@@ -58,6 +58,115 @@ ROS_DOMAIN_ID=15 ros2 run tf2_ros tf2_echo map base_link
 ROS_DOMAIN_ID=17 ros2 run tf2_ros tf2_echo map base_link
 ```
 
+## 카메라 영상
+
+카메라를 제어하려면 **각 로봇의 BLE 서비스가 `status`와 `set_camera` 명령을 지원해야** 합니다. PC Bluetooth가 켜져 있어야 하며, 저장소 루트의 `.venv`에 설치한 `bleak`을 사용합니다. 대시보드의 **카메라 시작/중지** 버튼은 BLE에서 Pinky를 찾고 응답 IP가 설정한 로봇 IP와 맞는지 확인한 뒤 명령을 보냅니다. 스트림 주소는 BLE 응답 URL을 우선 사용하고, 응답에 주소가 없을 때만 `http://<로봇IP>:5000/`을 기본값으로 사용합니다.
+
+로봇의 BLE 서버 파일(`/opt/pinky-ble/ble_server.py`)은 이 저장소에 포함되지 않으며, 로봇마다 별도로 설치·관리합니다. 두 로봇 모두 카메라 제어가 가능한 같은 버전의 서비스를 실행해야 합니다. `unknown cmd: set_camera`는 해당 로봇의 BLE 서비스가 구버전이라는 뜻이므로, 그 로봇의 서비스를 갱신하고 재시작하세요.
+
+로봇 카메라는 한 프로그램만 점유할 수 있으므로 대시보드에서 켜기 전에 Pinky Studio의 영상 창을 닫으세요. 대시보드는 로봇별 영상 스트림을 한 번만 받고, 여러 브라우저 창은 대시보드가 보관한 최신 프레임을 공유합니다.
+
+실물 PC의 IP와 주행 설정은 기본적으로 `~/.config/pinky_fleet.env`에 둡니다. 이 파일은 Git에 올리지 않습니다. 다른 설정 파일은 `PINKY_FLEET_ENV=/경로/파일`로 지정할 수 있습니다. `ROBOT1_IP`와 `ROBOT2_IP` 값은 DDS peer와 카메라 주소에 사용됩니다.
+
+| 설정 | 기본값 | 설명 |
+|---|---:|---|
+| `ROBOT1_IP`, `ROBOT2_IP` | 필수 | 각 로봇의 Wi-Fi IP |
+| `ROBOT1_DOMAIN`, `ROBOT2_DOMAIN` | `15`, `17` | 각 로봇의 ROS 2 도메인 |
+| `FLEET_PORT` | `8080` | 대시보드 포트 |
+| `robot1_camera_host`, `robot2_camera_host` | 각 로봇 IP | 영상 연결 주소. 비우면 해당 카메라를 사용하지 않음 |
+| `camera_port` | `5000` | BLE 응답에 URL이 없을 때 쓰는 기본 카메라 포트 |
+| `host` | `127.0.0.1` | 대시보드 bind 주소. 기본값은 PC 내부에서만 접속 가능 |
+| `map`, `params_file` | 패키지 기본 지도·Nav2 설정 | 지도 파일과 Nav2 파라미터 |
+| `robot1_initial_pose`, `robot2_initial_pose` | 비어 있음 | 초기 위치 `x,y,yaw` |
+| `auto_spin` | `true` | 위치를 모를 때 로봇이 자동으로 한 바퀴 돌아 위치를 찾음 |
+| `traffic_zones` | good3 구역 파일 | 로봇 간 교통 정리 구역. `traffic_zones:=`로 끌 수 있음 |
+
+`start_fleet.sh`의 설정은 실행 시 launch 인자로 덮어쓸 수 있습니다.
+
+```bash
+ros2 launch pinky_fleet multi_robot.launch.py \
+  robot1_camera_host:=<로봇1주소> robot2_camera_host:=<로봇2주소> camera_port:=5000
+```
+
+예: `fleet auto_spin:=false camera_port:=5001`. 일반 실행은 [실물 실행 안내](../../../docs/real.md)의 설정 파일과 `fleet` alias를 사용하면 됩니다.
+
+카드를 통해 카메라를 켜면 대시보드가 로봇별 스트림을 한 번만 받고, 브라우저는 대시보드의 `/camera/robot1.jpg` 또는 `/camera/robot2.jpg`에서 약 150 ms 간격으로 최신 JPEG를 가져옵니다. 상태 줄의 `브라우저 표시 WxH`는 브라우저가 프레임을 디코딩했다는 뜻입니다. 영상 수신 상태와 브라우저 표시 상태를 따로 확인할 수 있습니다.
+
+YOLO는 패키지의 고정 모델 경로 `pinky_fleet/models/yolo11n.pt`를 사용하며 실행 시 GPU가 있으면 Ultralytics가 자동으로 선택합니다. 모델 가중치가 없으면 첫 실행 때 인터넷에서 자동으로 내려받습니다. 차선·횡단보도 전용 모델은 아니며, YOLO 결과는 주행 명령에 연결되지 않습니다.
+
+차선 안에서 Nav2 목표를 주행하고 횡단보도·장애물 정책을 적용하기 위한 데이터셋, 영상-로봇 좌표 보정, costmap 통합, 정지 감시 계획은 [실물 차선 인식·주행 계획](../../../docs/lane_aware_driving_plan.md)을 참고하세요.
+
+## 독립 카메라·인식·차선 주행 실험
+
+대시보드와 별도로 카메라 시작, 학습 모델 추론, 화면 표시를 하는 `vision_drive`를 실행할 수 있습니다. 첫 실행은 **관찰 모드**이며 속도 명령을 내지 않습니다. 학습된 Ultralytics segmentation 모델 파일은 직접 준비해 경로로 전달합니다. 모델에 적어도 `driveable_area` segmentation 클래스가 있어야 차선 추종 판단이 가능합니다. COCO 객체 모델용 기본 정지 클래스는 `person`, `bicycle`, `car`, `motorcycle`, `bus`, `truck`, `bench`, `backpack`, `suitcase`, `chair`입니다. 클래스 이름이 다르면 인자를 바꾸세요.
+
+주행 실험은 Nav2/대시보드가 같은 로봇의 `/cmd_vel`을 발행하지 않는 상태에서만 가능합니다. 현재 구현은 지도 목적지를 쓰는 Nav2 주행이 아니라, 카메라 영상에서 주행 가능 mask의 중심을 따라가는 **저속 시각 추종 prototype**입니다. 로봇 속도 watchdog 및 비상정지를 확인하고, 사람이 바로 옆에서 감독하는 통제 구역에서만 사용하세요. 카메라·추론·라이다가 stale하거나 주행 영역이 불분명하면 0 속도를 발행합니다. 프로세스 강제 종료/PC 전원 상실에도 정지하는 로봇 측 watchdog 없이는 주행 모드를 실행하지 마세요.
+
+ROS 도메인은 해당 로봇 값(로봇1 `15`, 로봇2 `17`)을 사용하고, `ROS_STATIC_PEERS`에는 로봇 IP를 둡니다. Pinky Studio 영상 창은 닫아 두세요. `.pt` 모델 파일은 Git에 추가하지 않습니다.
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/giddongcar/pinky_pro/install/setup.bash
+export ROS_DOMAIN_ID=15 ROS_STATIC_PEERS=192.168.0.6
+export PYTHONPATH="$HOME/giddongcar/.venv/lib/python3.12/site-packages${PYTHONPATH:+:$PYTHONPATH}"
+
+# 영상 + segmentation/객체 인식만 확인 (속도 명령 없음)
+ros2 run pinky_fleet vision_drive --robot-ip 192.168.0.6 --model /경로/학습모델.pt --mode observe
+
+# 통제된 저속 lane-follow 실험. watchdog/E-stop 확인 뒤, 직접 감독할 때만 실행
+ros2 run pinky_fleet vision_drive --robot-ip 192.168.0.6 --model /경로/학습모델.pt \
+  --mode drive --enable-motion --confirm-supervised-test --watchdog-verified
+```
+
+`vision_drive`는 로컬 모델 추론을 위해 Ultralytics의 외부 DNS 연결 확인을 오프라인 모드로 실행합니다. 모델 파일과 Python 의존성이 이미 설치되어 있으면 인터넷 없이도 시작할 수 있습니다. 카메라 제어는 로봇과 BLE, 영상 수신은 같은 로컬 네트워크 연결이 필요합니다.
+
+흰 테이프 차선 검출과 저속 라인 추종 실험은 별도 `pinky_driving` 패키지의 `tape_lane_drive`를 사용합니다. 실행법과 안전 조건은 [pinky_driving README](../pinky_driving/README.md)를 참고하세요.
+
+관찰 창에서 `s`를 누르면 원본 프레임, 인식 오버레이, 탐지 결과 JSON을 `~/vision_drive_observations`에 저장합니다. `r`은 원본/오버레이 MP4 녹화를 시작·종료하고, `q`는 종료합니다. 저장 위치는 `--output-dir`로 바꿀 수 있습니다. 예를 들어 YOLOTL 가중치는 클래스가 `lane`이므로 아래처럼 관찰할 수 있습니다.
+
+```bash
+ros2 run pinky_fleet vision_drive --robot-ip 192.168.0.6 \
+  --model "$HOME/.cache/pinky_fleet/yolotl/weights.pt" \
+  --driveable-class lane --mode observe
+```
+
+YOLOTL의 `lane` 마스크는 도로/BEV 시점의 차선 데이터로 학습된 결과이며 Pinky 바닥의 주행 가능 영역으로 검증되지 않았습니다. 이 명령은 관찰·샘플 저장용입니다. 저장한 원본 프레임을 코스 장면별로 선별·라벨링해 전용 모델을 학습해야 합니다. COCO 기본 모델은 흰 테이프 차선, 횡단보도, 학습되지 않은 사용자 정의 장애물을 인식하지 않으며, YOLOTL은 `lane`만 탐지합니다. 실물 장애물 안전 정지는 LiDAR/Nav2 경로를 유지해야 합니다.
+
+`q` 또는 Ctrl+C로 종료하면 0 속도를 반복 발행하고 카메라 중지를 요청합니다. 정상 종료 시 동작이며 강제 종료 시 정지를 보장하지 않습니다. 초기 최대 전진 속도는 `0.04 m/s`, 전방 라이다 정지 기준은 `0.35 m`입니다. 실제 제동거리를 측정한 뒤에만 조정하세요. `--crosswalk-action slow|stop|ignore`로 횡단보도 정책을 바꿀 수 있으며 기본은 감속입니다. 이 prototype 결과를 대시보드의 Nav2 경로에 연결하려면 별도 보정 및 안전 검토가 필요합니다.
+
+### 내려받은 공개 차선 모델
+
+실외 자동차 영상으로 학습한 YOLOv11 segmentation 예제를 `models/lane_yolo11n_seg_best.pt`에 내려받았습니다. 원본 저장소에는 좌·우 실선/점선 네 종류 클래스가 기록되어 있습니다. 이 모델은 `driveable_area` 클래스가 없어 현재 도구의 `drive` 모드에는 맞지 않으므로 **실물 주행에 사용하지 마세요**. `observe` 모드에서 출력 형식과 오버레이를 살펴보는 용도로만 두었습니다. 파일은 `.gitignore` 대상이라 Git에 커밋되지 않으며, 필요하면 원본 [저장소](https://github.com/SyedaEmanSaleem/Lane-Detection-Segmentation-using-YOLOv11)에서 다시 받을 수 있습니다. 원본 저장소는 MIT 라이선스를 표시합니다.
+
+
+YOLO, CUDA용 PyTorch, BLE 라이브러리는 저장소 루트에서 한 번 설치합니다. ROS Python과 패키지를 공유하도록 `--system-site-packages` 가상환경을 사용합니다. 아래 CUDA 13.0 설치 명령은 현재 관제 PC에서 확인한 조합입니다. 다른 PC에서는 [PyTorch 설치 선택기](https://pytorch.org/get-started/locally/)에서 OS·pip·Python·CUDA를 선택해 해당 명령을 쓰세요.
+
+```bash
+cd ~/Desktop/giddongcar
+python3 -m venv --system-site-packages .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
+.venv/bin/python -m pip install ultralytics bleak
+```
+
+GPU 사용 가능 여부와 설치 버전은 아래처럼 확인합니다. `CUDA 사용 가능: True`면 GPU 가속이 가능합니다.
+
+```bash
+source /opt/ros/jazzy/setup.bash
+PYTHONPATH="$PWD/.venv/lib/python3.12/site-packages${PYTHONPATH:+:$PYTHONPATH}" \
+  python3 -c "import torch, ultralytics; print('Ultralytics', ultralytics.__version__); print('PyTorch', torch.__version__); print('CUDA 사용 가능:', torch.cuda.is_available())"
+```
+
+실물 관제는 `scripts/start_fleet.sh`가 venv 경로를 ROS Python에 자동으로 추가합니다. 직접 `ros2 launch`할 때는 위의 `PYTHONPATH` 설정을 같은 터미널에서 먼저 실행해야 합니다. `.pt` 가중치는 대용량 파일이므로 Git에 넣지 않습니다. 가중치가 없으면 Ultralytics가 `YOLO('yolo11n.pt')` 로딩 중 자동으로 내려받습니다. 첫 다운로드에는 인터넷이 필요합니다. 다운로드나 모델 초기화에 실패해도 카메라와 Nav2는 계속 실행되며 YOLO 상태에 오류가 표시됩니다.
+
+### 문제 확인
+
+- `unknown cmd: set_camera`: 해당 로봇의 BLE 서비스가 카메라 제어를 지원하지 않습니다. `/opt/pinky-ble/ble_server.py`를 카메라 지원 버전으로 갱신하고 BLE 서비스를 재시작하세요.
+- `카메라 꺼짐` 또는 `Connection refused`: BLE 시작 응답과 대시보드에 표시된 로봇 주소를 확인하고, 기본 포트를 쓰는 경우 로봇에서 `sudo ss -ltnp | grep ':5000'`을 확인하세요. BLE 응답이 별도 주소를 반환하면 그 주소가 우선입니다.
+- `영상 수신 중`인데 브라우저 표시 크기가 안 뜸: 대시보드 JPEG 요청이나 브라우저 디코딩 문제입니다. `브라우저 이미지 디코딩 실패`가 표시되면 JPEG 응답을 확인하세요.
+- `:5000/`이 `<img src="/snapshot?...">`가 포함된 HTML을 반환하는 것은 정상일 수 있으며, 대시보드는 해당 `/snapshot`에서 JPEG를 받습니다. 이 로봇에서 확인한 Jupyter 포트는 `8888`입니다.
+- 대시보드의 카메라와 YOLO는 관측 기능이며 속도 명령을 보내지 않습니다. 별도 `vision_drive --mode drive`는 위에 설명한 감독형 prototype 주행 모드입니다.
+
 ## 실행 (Gazebo, 로봇 2대)
 
 ```bash

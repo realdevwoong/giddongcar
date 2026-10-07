@@ -8,6 +8,11 @@
 #   ROBOT1_DOMAIN=15        # 생략하면 15
 #   ROBOT2_DOMAIN=17        # 생략하면 17
 #   FLEET_PORT=8081         # 생략하면 8080
+#   카메라 주소는 각 ROBOT*_IP, YOLO 모델은 pinky_fleet/models/yolo11n.pt를 쓴다.
+#   로봇 BLE 서비스가 set_camera를 지원해야 한다(PC Bluetooth 필요).
+#   unknown cmd: set_camera면 로봇의 /opt/pinky-ble/ble_server.py를 갱신하고 서비스를 재시작한다.
+#   스트림 기본 포트는 5000.
+#   카메라 포트만 다르면 launch 인자로 바꾼다: start_fleet.sh camera_port:=5001
 #
 # 하는 일
 #   1. Ctrl+Z로 멈춰 둔 예전 ROS 프로세스를 없앤다. 멈춘 프로세스도 DDS에 남아 로봇 데이터를 막는다.
@@ -33,8 +38,21 @@ ROBOT1_DOMAIN=${ROBOT1_DOMAIN:-15}
 ROBOT2_DOMAIN=${ROBOT2_DOMAIN:-17}
 FLEET_PORT=${FLEET_PORT:-8080}
 
+# ROS setup hooks read optional variables that may be unset. Source them without
+# nounset, then restore strict variable checking for the rest of this script.
+set +u
 source /opt/ros/jazzy/setup.bash
 source "$WS/install/setup.bash"
+set -u
+
+# ROS entry points use /usr/bin/python3 even when a venv is active. Add the
+# project YOLO venv packages to that interpreter's import path when present.
+REPO_ROOT=$(dirname "$WS")
+YOLO_SITE=$(find "$REPO_ROOT/.venv/lib" -mindepth 2 -maxdepth 2 -type d \
+    -path '*/site-packages' -print -quit 2>/dev/null || true)
+if [ -n "$YOLO_SITE" ]; then
+    export PYTHONPATH="$YOLO_SITE${PYTHONPATH:+:$PYTHONPATH}"
+fi
 
 # ── 1. 남은 관제 정리
 running=$(ps -eo pid=,stat=,args= | awk '$2 !~ /^T/ && /fleet_dashboard|multi_robot\.launch\.py/ && !/awk/ {print $1}')
@@ -83,6 +101,7 @@ trap '' TSTP        # Ctrl+Z 무시. 무시 설정은 launch와 Nav2에도 그�
 trap ':' INT        # Ctrl+C는 launch가 받아 정리한다. 이 셸은 죽지 않고 남아 0 속도를 보낸다
 echo "== 관제 실행: http://localhost:$FLEET_PORT  (끌 때 Ctrl+C · Ctrl+Z는 막아 둠)"
 ros2 launch pinky_fleet multi_robot.launch.py port:="$FLEET_PORT" \
-    robot1_domain:="$ROBOT1_DOMAIN" robot2_domain:="$ROBOT2_DOMAIN" "$@"
+    robot1_domain:="$ROBOT1_DOMAIN" robot2_domain:="$ROBOT2_DOMAIN" \
+    robot1_camera_host:="$ROBOT1_IP" robot2_camera_host:="$ROBOT2_IP" "$@"
 trap '' INT         # 0 속도를 보내는 동안에는 Ctrl+C로 끊기지 않게
 stop_robots
