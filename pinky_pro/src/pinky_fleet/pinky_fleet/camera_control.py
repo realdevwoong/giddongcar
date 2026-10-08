@@ -168,6 +168,11 @@ class PinkyCameraControl:
                     }, 'camera_result')
                 else:
                     result = await self._send(client, messages, {'cmd': 'set_camera', 'enabled': False}, 'camera_result')
+                # Keep the robot's complete response in the PC log before interpreting it.
+                # This exposes fields such as conflict, message, enabled and running when
+                # the firmware rejects startup with a generic error.
+                LOGGER.info('%s 로봇 set_camera 원본 응답 (요청 enabled=%s): %s',
+                            self.name, enabled, result)
                 if result.get('conflict'):
                     raise RuntimeError('카메라가 다른 프로그램에서 사용 중입니다. Pinky Studio의 영상 창을 닫고 다시 시도하세요.')
                 if not result.get('ok'):

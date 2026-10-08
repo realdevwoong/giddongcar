@@ -14,6 +14,8 @@ import os
 from pathlib import Path
 import time
 
+import yaml
+
 import cv2
 import numpy as np
 import rclpy
@@ -28,14 +30,15 @@ from pinky_fleet.camera_stream import MJPEGCamera
 LOGGER = logging.getLogger('vision_drive')
 
 
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description='Pinky 카메라/YOLO 인식과 감독형 차선 주행 실험')
     parser.add_argument('--robot-ip', required=True, help='로봇 Wi-Fi IP (예: 192.168.0.6)')
+    parser.add_argument('--preset', help='실행 설정 YAML 파일 경로')
     parser.add_argument('--camera-port', type=int, default=5000)
     parser.add_argument('--ble-name', default='',
                         help='카메라를 켤 로봇의 BLE 이름 (예: pinky_6422). 같은 IP 로봇이 여럿일 때 지정')
-    parser.add_argument('--model', required=True, help='학습한 Ultralytics segmentation .pt 파일 경로')
+    parser.add_argument('--model', help='학습한 Ultralytics segmentation .pt 파일 경로 (preset 값 덮어쓰기 가능)')
     parser.add_argument('--device', default='auto', help='Ultralytics 장치: auto, cpu, 0 등')
     parser.add_argument('--driveable-class', default='driveable_area',
                         help='분할 모델의 주행 가능 영역 클래스명')
@@ -43,7 +46,10 @@ def parse_args():
                         default='person,bicycle,car,motorcycle,bus,truck,bench,backpack,suitcase,chair',
                         help='보이면 정지할 탐지 클래스명, 쉼표 구분')
     parser.add_argument('--crosswalk-class', default='crosswalk')
-    parser.add_argument('--crosswalk-action', choices=('slow', 'stop', 'ignore'), default='slow')
+    parser.add_argument('--crosswalk-action', choices=('slow', 'stop', 'stop-then-go', 'ignore'),
+                        default='stop-then-go')
+    parser.add_argument('--crosswalk-stop-seconds', type=float, default=10.0,
+                        help='stop-then-go 모드에서 횡단보도 감지 후 정지할 시간')
     parser.add_argument('--mode', choices=('observe', 'drive'), default='observe')
     parser.add_argument('--enable-motion', action='store_true',
                         help='실제 주행 명령을 허용 (drive 모드에서만 적용)')
@@ -51,14 +57,71 @@ def parse_args():
                         help='장애물 없는 통제 구역에서 직접 감독함을 확인')
     parser.add_argument('--watchdog-verified', action='store_true',
                         help='로봇 측 cmd_vel 정지 watchdog과 비상정지를 확인')
-    parser.add_argument('--max-linear', type=float, default=0.04, help='최대 전진 속도 m/s')
+    parser.add_argument('--confirm-attended-test-without-watchdog', action='store_true',
+                        help='로봇 watchdog 없이 시험함을 확인; 사람이 로봇 옆에서 물리 비상정지를 잡고 감독')
+    parser.add_argument('--max-linear', type=float, default=0.05, help='최대 전진 속도 m/s')
     parser.add_argument('--max-angular', type=float, default=0.25, help='최대 회전 속도 rad/s')
+    parser.add_argument('--steering-gain', type=float, default=1.2,
+                        help='먼 쪽 주행 영역 중심 오차에 적용할 조향 gain')
+    parser.add_argument('--turn-radius-limit', type=float, default=0.08,
+                        help='급회전 때 전진 속도를 제한할 최대 곡률 반경 m')
     parser.add_argument('--stop-distance', type=float, default=0.35,
                         help='라이다 전방 정지 거리 m (제동 시험 전 보수적 초기값)')
+    parser.add_argument('--obstacle-min-width', type=float, default=0.12,
+                        help='정지 장애물로 볼 LiDAR 물체의 최소 가로 폭 m')
+    parser.add_argument('--lane-recovery-seconds', type=float, default=0.6,
+                        help='주행 영역이 잠깐 사라졌을 때 마지막 조향 방향으로 제자리 재탐색할 최대 시간')
     parser.add_argument('--headless', action='store_true', help='OpenCV 영상 창을 띄우지 않음')
     parser.add_argument('--output-dir', default='~/vision_drive_observations',
                         help='관찰 모드에서 프레임/결과를 저장할 디렉터리')
-    return parser.parse_args()
+    raw_args = list(os.sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(raw_args)
+    supplied = {
+        action.dest
+        for action in parser._actions
+        if action.option_strings and any(
+            token == option or token.startswith(option + '=')
+            for option in action.option_strings for token in raw_args)
+    }
+    if args.preset:
+        preset_path = Path(args.preset).expanduser()
+        try:
+            preset = yaml.safe_load(preset_path.read_text(encoding='utf-8'))
+        except (OSError, yaml.YAMLError) as exc:
+            parser.error(f'preset YAML을 읽을 수 없습니다 ({preset_path}): {exc}')
+        if not isinstance(preset, dict):
+            parser.error('preset은 key-value 형식의 YAML mapping이어야 합니다.')
+        protected = {
+            'robot_ip', 'preset',
+        }
+        actions = {action.dest: action for action in parser._actions}
+        for key, value in preset.items():
+            if key in protected:
+                parser.error(f'preset에서 {key} 설정은 허용하지 않습니다. 명령행에서 직접 지정하세요.')
+            action = actions.get(key)
+            if action is None or key == 'help':
+                parser.error(f'preset에 알 수 없는 설정이 있습니다: {key}')
+            if key in supplied:
+                continue
+            try:
+                if isinstance(action, argparse._StoreTrueAction):
+                    if not isinstance(value, bool):
+                        raise ValueError('boolean 값이어야 합니다')
+                elif action.type is not None:
+                    value = action.type(value)
+                if action.choices is not None and value not in action.choices:
+                    raise ValueError(f'허용 값: {", ".join(map(str, action.choices))}')
+            except (TypeError, ValueError) as exc:
+                parser.error(f'preset 설정 {key} 값이 잘못되었습니다: {exc}')
+            setattr(args, key, value)
+        LOGGER.info('주행 preset 로드: %s', preset_path)
+    if not args.model:
+        parser.error('--model 또는 preset의 model 설정이 필요합니다.')
+    if args.mode == 'drive':
+        LOGGER.warning('최종 설정: mode=drive, enable_motion=%s, supervised=%s, watchdog=%s, attended_without_watchdog=%s',
+                       args.enable_motion, args.confirm_supervised_test,
+                       args.watchdog_verified, args.confirm_attended_test_without_watchdog)
+    return args
 
 
 class VisionDriveNode(Node):
@@ -74,18 +137,45 @@ class VisionDriveNode(Node):
         self.scan = message
         self.scan_at = time.monotonic()
 
-    def front_range(self, max_age=0.5, half_angle=math.radians(22.5)):
+    def front_range(self, max_age=0.5, half_angle=math.radians(22.5), min_width=0.12):
         if self.scan is None or self.scan_at is None or time.monotonic() - self.scan_at > max_age:
             return None
-        values = []
+        points = []
         scan = self.scan
         for index, distance in enumerate(scan.ranges):
             angle = scan.angle_min + index * scan.angle_increment
             angle = math.atan2(math.sin(angle), math.cos(angle))
             if abs(angle) <= half_angle and math.isfinite(distance):
                 if scan.range_min <= distance <= scan.range_max:
-                    values.append(distance)
-        return min(values) if values else None
+                    points.append((index, angle, distance))
+
+        # Ignore isolated returns such as floor specks/tape edges. Keep only
+        # connected front-sector clusters whose measured lateral span is wide
+        # enough to represent a substantial obstacle.
+        clusters = []
+        current = []
+        previous_index = None
+        previous_xy = None
+        for index, angle, distance in points:
+            xy = (distance * math.cos(angle), distance * math.sin(angle))
+            adjacent = (previous_index is not None and index == previous_index + 1
+                        and math.dist(xy, previous_xy) <= 0.06)
+            if not adjacent and current:
+                clusters.append(current)
+                current = []
+            current.append((xy, distance))
+            previous_index, previous_xy = index, xy
+        if current:
+            clusters.append(current)
+
+        obstacle_ranges = []
+        for cluster in clusters:
+            if len(cluster) < 2:
+                continue
+            lateral_span = max(point[0][1] for point in cluster) - min(point[0][1] for point in cluster)
+            if lateral_span >= min_width:
+                obstacle_ranges.extend(distance for _, distance in cluster)
+        return min(obstacle_ranges) if obstacle_ranges else None
 
     def external_cmd_vel_publishers(self):
         return [info for info in self.get_publishers_info_by_topic('cmd_vel')
@@ -124,7 +214,7 @@ def _mask_for_class(result, class_name, image_shape):
 
 
 def _lane_error(mask):
-    """Return normalized visual steering error; reject masks outside the camera center."""
+    """Estimate steering from several lookahead rows to anticipate bends."""
     if mask is None:
         return None
     height, width = mask.shape
@@ -135,13 +225,37 @@ def _lane_error(mask):
     x_center = width // 2
     component = int(labels[base_y, x_center])
     if component == 0:
+        # A sharp bend can move the visible driveable patch slightly off the
+        # exact image center. Reacquire only a component that still intersects
+        # a narrow corridor near the bottom of the image.
+        half_corridor = int(width * 0.28)
+        for fraction in (0.95, 0.88, 0.84):
+            row_y = min(height - 1, int(height * fraction))
+            row_labels = labels[row_y, max(0, x_center - half_corridor):
+                                min(width, x_center + half_corridor + 1)]
+            candidates = row_labels[row_labels > 0]
+            if candidates.size:
+                ids, counts = np.unique(candidates, return_counts=True)
+                component = int(ids[np.argmax(counts)])
+                break
+        if component == 0:
+            return None
+    # The lower row reacts late at corners. Blend centers from farther lookahead
+    # rows so the steering starts following a bend before the near mask disappears.
+    centers = []
+    weights = []
+    # Far rows predict the upcoming bend; near rows keep the robot centered.
+    for fraction, weight in ((0.52, 0.65), (0.62, 0.18), (0.72, 0.11), (0.82, 0.06)):
+        row = labels[min(height - 1, int(height * fraction))]
+        xs = np.flatnonzero(row == component)
+        if xs.size >= max(3, int(width * 0.025)):
+            centers.append((float(xs[0]) + float(xs[-1])) / 2.0)
+            weights.append(weight)
+    # A single thin row is too fragile to steer from; fail closed until a path
+    # direction is supported by multiple parts of the visible mask.
+    if len(centers) < 3:
         return None
-    look_y = min(height - 1, int(height * 0.68))
-    row = labels[look_y]
-    xs = np.flatnonzero(row == component)
-    if xs.size < max(3, int(width * 0.025)):
-        return None
-    lane_center = (float(xs[0]) + float(xs[-1])) / 2.0
+    lane_center = float(np.average(centers, weights=weights))
     return (lane_center - x_center) / max(1.0, width / 2.0)
 
 
@@ -161,20 +275,56 @@ def _detections(result):
 
 def _policy(node, mask, detections, args, inference_at, camera_at):
     """Fail closed when perception or robot sensor data is unavailable/stale."""
+    height, width = mask.shape if mask is not None else (0, 0)
+    stop_classes = {name.strip() for name in args.obstacle_classes.split(',') if name.strip()}
+    crosswalk_seen = False
+    for label, confidence, x1, y1, x2, y2 in detections:
+        if confidence < 0.45:
+            continue
+        in_path = (y2 >= height * 0.48 and x2 >= width * 0.2 and x1 <= width * 0.8)
+        if in_path and label == args.crosswalk_class:
+            crosswalk_seen = True
+
+    now = time.monotonic()
+    if crosswalk_seen:
+        if getattr(args, '_crosswalk_started_at', None) is None:
+            args._crosswalk_started_at = now
+        args._crosswalk_last_seen_at = now
+    elif (getattr(args, '_crosswalk_last_seen_at', None) is not None
+          and now - args._crosswalk_last_seen_at > 0.75):
+        args._crosswalk_started_at = None
+        args._crosswalk_last_seen_at = None
+
     if time.monotonic() - inference_at > 0.5 or camera_at is None or camera_at > 0.5:
         return 0.0, 0.0, '카메라/인식 지연: 정지'
     error = _lane_error(mask)
     if error is None:
+        recovery_started = getattr(node, 'lane_recovery_started_at', None)
+        if recovery_started is None:
+            node.lane_recovery_started_at = time.monotonic()
+            recovery_started = node.lane_recovery_started_at
+        last_error = getattr(node, 'last_lane_error', None)
+        elapsed = time.monotonic() - recovery_started
+        if (last_error is not None and abs(last_error) >= 0.06
+                and elapsed < args.lane_recovery_seconds):
+            # Turn in place toward the last visible path estimate, for a short
+            # bounded interval. Never reverse or creep forward with no lane.
+            recovery_rate = min(args.max_angular, 0.15)
+            gain = args.steering_gain
+            angular = max(-recovery_rate, min(recovery_rate, -gain * last_error))
+            return 0.0, angular, '주행 영역 불명확: 방향 한정 재탐색'
         return 0.0, 0.0, '주행 영역 불명확: 정지'
-    front = node.front_range()
+    node.last_lane_error = error
+    node.last_lane_valid_at = time.monotonic()
+    node.lane_recovery_started_at = None
+    front = node.front_range(min_width=args.obstacle_min_width)
     if args.mode == 'drive' and front is None:
         return 0.0, 0.0, '라이다 입력 없음/지연: 정지'
     if front is not None and front <= args.stop_distance:
         return 0.0, 0.0, f'전방 장애물 {front:.2f} m: 정지'
 
-    height, width = mask.shape
-    stop_classes = {name.strip() for name in args.obstacle_classes.split(',') if name.strip()}
     slow_crosswalk = False
+    crosswalk_released = False
     for label, confidence, x1, y1, x2, y2 in detections:
         if confidence < 0.45:
             continue
@@ -184,13 +334,43 @@ def _policy(node, mask, detections, args, inference_at, camera_at):
         if in_path and label == args.crosswalk_class:
             if args.crosswalk_action == 'stop':
                 return 0.0, 0.0, '횡단보도: 정지 정책'
+            if args.crosswalk_action == 'stop-then-go':
+                elapsed = now - args._crosswalk_started_at
+                if elapsed < args.crosswalk_stop_seconds:
+                    remaining = max(0.0, args.crosswalk_stop_seconds - elapsed)
+                    return 0.0, 0.0, f'횡단보도 대기: {remaining:.1f}초'
+                crosswalk_released = True
             slow_crosswalk = args.crosswalk_action == 'slow'
 
     linear = min(args.max_linear, 0.02 if slow_crosswalk else args.max_linear)
-    angular = max(-args.max_angular, min(args.max_angular, -0.35 * error))
+    angular = max(-args.max_angular, min(args.max_angular, -args.steering_gain * error))
+    turn_limited = False
+    # Blend into a curvature speed cap as the predicted turn gets sharper.
+    # This avoids carrying straight-line speed into a corner while keeping the
+    # speed transition smooth. At the angular limit, v/|w| is capped by radius.
+    angular_demand = abs(angular)
+    turn_start = min(0.03, args.max_angular * 0.5)
+    turn_blend = min(1.0, max(0.0, (angular_demand - turn_start)
+                              / max(1e-6, args.max_angular - turn_start)))
+    curve_speed_limit = min(linear, angular_demand * args.turn_radius_limit)
+    if turn_blend > 0.0 and curve_speed_limit < linear:
+        linear = linear * (1.0 - turn_blend) + curve_speed_limit * turn_blend
+        turn_limited = True
+    obstacle_limited = False
     if front is not None and front < args.stop_distance + 0.25:
         linear *= max(0.0, (front - args.stop_distance) / 0.25)
-    return linear, angular, '횡단보도 감속' if slow_crosswalk else '차선 영역 추종'
+        obstacle_limited = True
+    if slow_crosswalk:
+        reason = '횡단보도 감속'
+    elif obstacle_limited:
+        reason = f'전방 근접 감속 {front:.2f} m'
+    elif turn_limited:
+        reason = '코너 감속·조향'
+    elif crosswalk_released:
+        reason = '횡단보도 대기 완료'
+    else:
+        reason = '차선 영역 추종'
+    return linear, angular, reason
 
 
 def main():
@@ -200,14 +380,32 @@ def main():
     if not model_path.is_file():
         raise SystemExit(f'학습 모델 파일을 찾을 수 없습니다: {model_path}')
     if args.mode == 'drive':
-        if not (args.enable_motion and args.confirm_supervised_test and args.watchdog_verified):
+        stop_assurance = (args.watchdog_verified
+                          or args.confirm_attended_test_without_watchdog)
+        if not (args.enable_motion and args.confirm_supervised_test and stop_assurance):
             raise SystemExit('주행 모드에는 --enable-motion, --confirm-supervised-test, '
-                             '--watchdog-verified가 모두 필요합니다.')
-        if (args.max_linear <= 0 or args.max_linear > 0.04
+                             '그리고 --watchdog-verified 또는 '
+                             '--confirm-attended-test-without-watchdog가 필요합니다.')
+        if (args.max_linear <= 0 or args.max_linear > 0.05
                 or args.max_angular <= 0 or args.max_angular > 0.25
-                or args.stop_distance < 0.35):
-            raise SystemExit('초기 주행 한도는 max-linear <= 0.04 m/s, max-angular <= 0.25 rad/s, '
-                             'stop-distance >= 0.35 m 입니다.')
+                or not math.isfinite(args.steering_gain)
+                or args.steering_gain <= 0.0 or args.steering_gain > 2.0
+                or not math.isfinite(args.turn_radius_limit)
+                or args.turn_radius_limit < 0.03 or args.turn_radius_limit > 0.30
+                or args.stop_distance < 0.20
+                or not math.isfinite(args.obstacle_min_width)
+                or args.obstacle_min_width < 0.03 or args.obstacle_min_width > 0.50
+                or not math.isfinite(args.lane_recovery_seconds)
+                or args.lane_recovery_seconds < 0.0
+                or args.lane_recovery_seconds > 0.8
+                or not math.isfinite(args.crosswalk_stop_seconds)
+                or args.crosswalk_stop_seconds < 0.0):
+            raise SystemExit('초기 주행 한도는 max-linear <= 0.05 m/s, max-angular <= 0.25 rad/s, '
+                             'steering-gain <= 2.0, '
+                             'turn-radius-limit between 0.03 and 0.30 m, '
+                             'stop-distance >= 0.20 m, obstacle-min-width between 0.03 and 0.50 m, '
+                             'lane-recovery-seconds <= 0.8 s, '
+                             'crosswalk-stop-seconds >= 0 입니다.')
 
     try:
         # Ultralytics probes public DNS during import unless offline mode is set.
@@ -240,13 +438,14 @@ def main():
             started_wait = time.monotonic()
             while time.monotonic() - started_wait < 5.0:
                 rclpy.spin_once(node, timeout_sec=0.1)
-                if time.monotonic() - started_wait >= 2.0 and node.front_range() is not None:
+                if (time.monotonic() - started_wait >= 2.0
+                        and node.front_range(min_width=args.obstacle_min_width) is not None):
                     break
             others = node.external_cmd_vel_publishers()
             if others:
                 raise RuntimeError('다른 /cmd_vel 발행자가 있습니다. Nav2/대시보드를 중지한 뒤 다시 실행하세요: '
                                    + ', '.join(info.node_name for info in others))
-            if node.front_range() is None:
+            if node.front_range(min_width=args.obstacle_min_width) is None:
                 raise RuntimeError('라이다 /scan이 아직 유효하지 않습니다. 로봇 ROS 도메인과 토픽을 확인하세요.')
             LOGGER.warning('감독형 저속 주행 실험 시작. 즉시 정지하려면 창에서 q를 누르세요.')
 
@@ -282,6 +481,14 @@ def main():
                 last_latency_ms = (inference_at - inference_started) * 1000.0
                 current_command = _policy(node, mask, detections, args, inference_at, camera_age)
                 overlay = result.plot()
+                lane_error = _lane_error(mask)
+                if lane_error is not None:
+                    height, width = overlay.shape[:2]
+                    preview_x = int(np.clip(width / 2 + lane_error * width / 2, 0, width - 1))
+                    preview_y = int(height * 0.62)
+                    cv2.circle(overlay, (preview_x, preview_y), 6, (255, 0, 255), -1)
+                    cv2.line(overlay, (width // 2, preview_y), (preview_x, preview_y),
+                             (255, 0, 255), 2)
                 color = (0, 220, 0) if current_command[0] > 0 else (0, 0, 255)
                 cv2.putText(overlay, current_command[2], (8, 22), cv2.FONT_HERSHEY_SIMPLEX,
                             0.52, color, 2, cv2.LINE_AA)
@@ -289,8 +496,9 @@ def main():
                             f'VERIFIED DRIVE  v={current_command[0]:.2f}',
                             (8, 44), cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 1, cv2.LINE_AA)
                 names = ', '.join(sorted({item[0] for item in detections})) or '탐지 없음'
-                LOGGER.info('mode=%s policy=%s detections=%s inference=%.1fms',
-                            args.mode, current_command[2], names, last_latency_ms)
+                LOGGER.info('mode=%s policy=%s command=(v=%.3f,w=%.3f) detections=%s inference=%.1fms',
+                            args.mode, current_command[2], current_command[0], current_command[1],
+                            names, last_latency_ms)
                 last_frame = frame.copy()
                 last_detections = detections
                 if video_writers:
@@ -301,7 +509,7 @@ def main():
                 linear, angular, reason = current_command
                 if time.monotonic() - inference_at > 0.5 or camera_age is None or camera_age > 0.5:
                     linear, angular, reason = 0.0, 0.0, '카메라/인식 지연: 정지'
-                front = node.front_range()
+                front = node.front_range(min_width=args.obstacle_min_width)
                 if front is None or (front is not None and front <= args.stop_distance):
                     linear, angular, reason = 0.0, 0.0, '라이다 입력/전방 장애물: 정지'
                 if node.external_cmd_vel_publishers():

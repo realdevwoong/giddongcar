@@ -1,0 +1,18 @@
+# 통제 구역에서 사람이 로봇 옆을 지키며 진행하는 저속 차선 주행 실험용
+# robot_ip와 모션 허용/감독 확인은 안전을 위해 명령행에서 지정한다.
+enable_motion: true
+confirm_supervised_test: true
+confirm_attended_test_without_watchdog: true
+model: ~/vision_drive_observations/train_runs/lane_seg_v1/weights/best.pt
+mode: drive
+device: auto
+driveable_class: driveable_area
+crosswalk_action: stop-then-go
+crosswalk_stop_seconds: 10.0
+max_linear: 0.05
+max_angular: 0.25
+steering_gain: 1.2
+turn_radius_limit: 0.08
+stop_distance: 0.35
+obstacle_min_width: 0.12
+lane_recovery_seconds: 0.6
