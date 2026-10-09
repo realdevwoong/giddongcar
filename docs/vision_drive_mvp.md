@@ -1,6 +1,6 @@
 # Pinky 자율주행 MVP 진행 상황
 
-기준 요구사항은 `/home/fastcampus/Downloads/MVP_subject.html`의 차선 추종, 중앙 정렬, 횡단보도 일시 정지, 장애물 대기·재주행, S자/90도 코스다. 현재 PC 측 `pinky_fleet/vision_drive`로 가능한 프로토타입 범위와 남은 확인 항목을 기록한다. 실물 브링업은 수정하지 않는다.
+기준 요구사항은 MVP 과제 안내 문서(`MVP_subject.html`, 저장소 밖)의 차선 추종, 중앙 정렬, 횡단보도 일시 정지, 장애물 대기·재주행, S자/90도 코스다. 현재 PC 측 `pinky_fleet/vision_drive`로 가능한 프로토타입 범위와 남은 확인 항목을 기록한다. 실물 브링업은 수정하지 않는다.
 
 ## 요구사항 대응
 
@@ -21,20 +21,17 @@
 
 ## 감독형 실행 예시
 
-코너에서 각속도 상한을 높여 비교하려면 `--max-angular 0.25`를 사용한다. 먼 쪽의 곡률 신호를 더 강하게 반영하는 gain 기본값은 `1.2`이며, `--steering-gain`으로 조정할 수 있다. 코너에서는 `v / |w|`가 기본 0.08m를 넘지 않게 속도도 자동으로 줄인다. 전진 속도 상한은 요청된 `0.05 m/s`, 라이다 정지 기준은 `0.20 m`로 제한한 예시다.
+주행 값은 감독형 preset(`pinky_pro/src/pinky_fleet/config/vision_drive_supervised.yaml`)에 모아 두었다. 전진 속도 상한 `0.05 m/s`, 각속도 상한 `0.25 rad/s`, 먼 쪽 곡률 신호를 반영하는 `--steering-gain` `1.2`, 코너 반경 제한 `0.08 m`, 라이다 정지 기준 `0.35 m`, 횡단보도 10초 정지다. 모델 경로는 `~/vision_drive_observations/train_runs/lane_seg_v1/weights/best.pt`를 가정한다. 모션 허용·감독 확인 옵션은 preset에 넣을 수 없으므로 매번 명령행에 적는다.
 
 ```bash
 ros2 run pinky_fleet vision_drive \
-  --robot-ip 192.168.0.6 \
-  --model /home/fastcampus/vision_drive_observations/train_runs/lane_seg_v1/weights/best.pt \
-  --driveable-class driveable_area \
-  --mode drive --enable-motion --confirm-supervised-test \
-  --confirm-attended-test-without-watchdog \
-  --max-linear 0.05 --max-angular 0.25 --steering-gain 1.2 \
-  --turn-radius-limit 0.08 --stop-distance 0.20 \
-  --crosswalk-action stop-then-go --crosswalk-stop-seconds 10 \
-  --lane-recovery-seconds 0.6
+  --robot-ip <로봇 IP> \
+  --preset ~/giddongcar/pinky_pro/src/pinky_fleet/config/vision_drive_supervised.yaml \
+  --enable-motion --confirm-supervised-test \
+  --confirm-attended-test-without-watchdog
 ```
+
+값을 바꿔 비교할 때는 preset을 고치지 않고 명령행에 덧붙인다. 명령행 값이 preset보다 우선한다. 예를 들어 정지 거리를 허용 최솟값으로 줄이려면 `--stop-distance 0.20`, 다른 모델은 `--model /경로/모델.pt`를 추가한다.
 
 현재 bringup의 `cmd_vel` watchdog은 확인되지 않았다. 따라서 이 실행은 로봇 옆 감독자와 물리 비상정지가 있는 통제 구역의 짧은 실험에 한정한다. 화면에서 예상과 다르게 움직이면 `q` 또는 Ctrl+C로 종료한다. 강제 종료나 PC/네트워크 손실에 대한 정지는 보장되지 않는다.
 
