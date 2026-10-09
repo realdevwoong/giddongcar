@@ -77,7 +77,7 @@ def parse_args(argv=None):
                              '예상 방향으로 먼저 돌고, 못 찾으면 반대쪽으로 같은 각도까지 돈다. 0이면 회전 안 함')
     parser.add_argument('--headless', action='store_true', help='OpenCV 영상 창을 띄우지 않음')
     parser.add_argument('--output-dir', default='~/vision_drive_observations',
-                        help='관찰 모드에서 프레임/결과를 저장할 디렉터리')
+                        help='프레임·녹화 영상(r)·실행 로그를 저장할 디렉터리')
     raw_args = list(os.sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(raw_args)
     supplied = {
@@ -482,6 +482,15 @@ def _policy(node, mask, detections, args, inference_at, camera_at):
 def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     args = parse_args()
+    # Keep every run's log next to the recordings so a field run can be reviewed later.
+    log_dir = Path(args.output_dir).expanduser()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = logging.FileHandler(log_dir / f'vision_drive_{datetime.now():%Y%m%d_%H%M%S}_{args.mode}.log',
+                                   encoding='utf-8')
+    log_file.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+    logging.getLogger().addHandler(log_file)
+    LOGGER.info('실행 로그: %s', log_file.baseFilename)
+    LOGGER.info('설정: %s', {key: value for key, value in vars(args).items() if not key.startswith('_')})
     model_path = Path(args.model).expanduser()
     if not model_path.is_file():
         raise SystemExit(f'학습 모델 파일을 찾을 수 없습니다: {model_path}')
@@ -661,17 +670,17 @@ def main():
                     stem.with_name(stem.name + '.json').write_text(
                         json.dumps(metadata, ensure_ascii=False, indent=2), encoding='utf-8')
                     LOGGER.info('관찰 프레임 저장: %s', stem)
-                elif args.mode == 'observe' and key == ord('r'):
+                elif key == ord('r'):
                     if video_writers:
                         for writer in video_writers:
                             writer.release()
                         video_writers = None
-                        LOGGER.info('관찰 영상 녹화 완료: %s', recording_stem)
+                        LOGGER.info('영상 녹화 완료: %s', recording_stem)
                     elif last_frame is not None:
                         output_dir = Path(args.output_dir).expanduser()
                         output_dir.mkdir(parents=True, exist_ok=True)
                         stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                        recording_stem = output_dir / f'observe_{stamp}'
+                        recording_stem = output_dir / f'{args.mode}_{stamp}'
                         height, width = last_frame.shape[:2]
                         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
                         writers = [
@@ -683,10 +692,10 @@ def main():
                         if not all(writer.isOpened() for writer in writers):
                             for writer in writers:
                                 writer.release()
-                            LOGGER.error('관찰 영상 파일을 열 수 없습니다: %s', recording_stem)
+                            LOGGER.error('영상 파일을 열 수 없습니다: %s', recording_stem)
                         else:
                             video_writers = writers
-                            LOGGER.info('관찰 영상 녹화 시작: %s (r 키로 종료)', recording_stem)
+                            LOGGER.info('영상 녹화 시작: %s (r 키로 종료)', recording_stem)
             elif frame_bytes is None:
                 time.sleep(0.02)
             else:
@@ -697,7 +706,7 @@ def main():
         if video_writers:
             for writer in video_writers:
                 writer.release()
-            LOGGER.info('관찰 영상 녹화 저장: %s', recording_stem)
+            LOGGER.info('영상 녹화 저장: %s', recording_stem)
         if node is not None and args.mode == 'drive':
             node.publish_stop(duration=0.5)
         if camera_started:
