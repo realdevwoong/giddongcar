@@ -88,6 +88,9 @@ def parse_args(argv=None):
     parser.add_argument('--corner-max-turn-deg', type=float, default=100.0,
                         help='코너에서 차선을 잃었을 때 한쪽으로 제자리 회전할 최대 각도(도). '
                              '예상 방향으로 먼저 돌고, 못 찾으면 반대쪽으로 같은 각도까지 돈다. 0이면 회전 안 함')
+    parser.add_argument('--corner-pivot-distance', type=float, default=0.40,
+                        help='코너(정면이 막힘)로 판단하면 정면 벽이 이 거리(m)가 될 때까지 직진한 뒤 제자리 회전한다. '
+                             '복도 가운데쯤에서 돌아야 안쪽 선을 밟지 않는다. 0이면 판단한 자리에서 바로 회전')
     parser.add_argument('--corner-min-turn-deg', type=float, default=60.0,
                         help='정면 벽 앞에서 시작한 코너 회전은 odom으로 이 각도(도)를 돌기 전에는 끝내지 않는다. '
                              '20~30°만 돌고 전진해 코너 안쪽 테이프를 넘던 문제를 막는다. 0이면 끔')
@@ -568,6 +571,8 @@ def _track_crosswalk(node, seen, now):
 
 
 CORNER_REASON = '코너 제자리 회전'
+CORNER_APPROACH_REASON = '코너 접근: 직진'
+CORNER_APPROACH_S = 10.0  # most time to drive up to the pivot point before turning anyway
 
 
 def _corner_direction(history, window=1.0):
@@ -639,6 +644,37 @@ def _corner_turned(node, corner, now, args):
     return corner['first'] * rate * (2.0 * sweep - elapsed)
 
 
+def _corner_ahead(node, args):
+    """Distance to what is straight ahead: the narrow front cone or the nearest wide obstacle."""
+    values = [value for value in (node.front_clear(), node.front_range(min_width=args.obstacle_min_width))
+              if value is not None]
+    return min(values) if values else None
+
+
+def _corner_begin(node, args, now, trigger, closed, ahead):
+    """Start the in-place pivot: pick the side and, with the front closed, the corridor heading."""
+    reach = _corner_reach(args)
+    first, basis = _corner_pick(node, reach if closed else None)
+    target = node.open_heading(first, reach) if closed and hasattr(node, 'open_heading') else None
+    if target is not None:
+        # Reach the corridor heading before the side limit ends the first sweep.
+        target = first * min(abs(target), math.radians(args.corner_max_turn_deg - 5.0))
+    corner = node.corner = dict(
+        first=first, direction=first, started_at=now, failed=False, overshoot=0,
+        yaw0=_corner_heading(node), turned=0.0, phase='first', phase_at=now, target=target,
+        min_turn=math.radians(max(0.0, args.corner_min_turn_deg)) if closed and target is None else 0.0)
+    if target is not None:
+        plan = f'라이다 트인 쪽 {abs(math.degrees(target)):.0f}도까지'
+    elif closed:
+        plan = f'최소 {args.corner_min_turn_deg:.0f}도'
+    else:
+        plan = '정면 트임: 차선만 다시 찾음'
+    front = '정면 없음' if ahead is None else f'정면 {ahead:.2f} m'
+    LOGGER.info('코너 진입(%s, %s): %s으로 회전 (%s, %s, 회전량 %s)', trigger, front, '왼쪽' if first > 0 else '오른쪽',
+                basis, plan, 'odom' if corner['yaw0'] is not None else 'odom 없음: 시간으로 추정')
+    return corner
+
+
 def _corner_pivot(node, args, now, trigger='차선 소실'):
     """Bounded in-place search at a corner.
 
@@ -651,27 +687,28 @@ def _corner_pivot(node, args, now, trigger='차선 소실'):
     if corner is None:
         # Front closed (wall within reach) means a real corner, however it was noticed:
         # on 2026-10-09 18:39 every corner started with the lane lost, not the wall rule.
-        reach = _corner_reach(args)
         clear = node.front_clear()
         closed = (trigger.startswith('정면 벽') or bool(node.wall_ahead(args.corner_wall_distance))
-                  or (clear is not None and clear < reach))
-        first, basis = _corner_pick(node, reach if closed else None)
-        target = node.open_heading(first, reach) if closed and hasattr(node, 'open_heading') else None
-        if target is not None:
-            # Reach the corridor heading before the side limit ends the first sweep.
-            target = first * min(abs(target), math.radians(args.corner_max_turn_deg - 5.0))
-        corner = node.corner = dict(
-            first=first, direction=first, started_at=now, failed=False, overshoot=0,
-            yaw0=_corner_heading(node), turned=0.0, phase='first', phase_at=now, target=target,
-            min_turn=math.radians(max(0.0, args.corner_min_turn_deg)) if closed and target is None else 0.0)
-        if target is not None:
-            plan = f'라이다 트인 쪽 {abs(math.degrees(target)):.0f}도까지'
-        elif closed:
-            plan = f'최소 {args.corner_min_turn_deg:.0f}도'
+                  or (clear is not None and clear < _corner_reach(args)))
+        ahead = _corner_ahead(node, args)
+        if closed and args.corner_pivot_distance > 0.0 and ahead is not None and ahead > args.corner_pivot_distance:
+            # 19:16 on 2026-10-09 the lane vanished with the wall still >0.45 m away; turning there
+            # cut the inner line. Drive up to about the middle of the junction first.
+            corner = node.corner = dict(phase='approach', trigger=trigger, started_at=now, phase_at=now,
+                                        failed=False, overshoot=0, first=0, direction=0, yaw0=None,
+                                        turned=0.0, target=None, min_turn=0.0)
+            LOGGER.info('코너 감지(%s): 정면 %.2f m → %.2f m까지 직진한 뒤 회전', trigger, ahead,
+                        args.corner_pivot_distance)
         else:
-            plan = '정면 트임: 차선만 다시 찾음'
-        LOGGER.info('코너 진입(%s): %s으로 회전 (%s, %s, 회전량 %s)', trigger, '왼쪽' if first > 0 else '오른쪽',
-                    basis, plan, 'odom' if corner['yaw0'] is not None else 'odom 없음: 시간으로 추정')
+            corner = _corner_begin(node, args, now, trigger, closed, ahead)
+    if corner['phase'] == 'approach':
+        ahead = _corner_ahead(node, args)
+        if (ahead is not None and ahead > args.corner_pivot_distance
+                and now - corner['started_at'] < CORNER_APPROACH_S):
+            # Full speed while far, easing off over the last 15 cm.
+            speed = min(args.max_linear, max(0.03, args.max_linear * (ahead - args.corner_pivot_distance) / 0.15))
+            return speed, 0.0, f'{CORNER_APPROACH_REASON} (정면 {ahead:.2f} m)'
+        corner = _corner_begin(node, args, now, corner['trigger'], True, ahead)
     rate = args.max_angular
     if rate <= 0.0 or args.corner_max_turn_deg <= 0.0:
         return 0.0, 0.0, '주행 영역 불명확: 정지'
@@ -713,8 +750,8 @@ def _corner_keeps_turning(node, args, corner, error, now):
     2026-10-09 the floor at a corner looked wide and centred after 20-40 degrees, and
     driving on from there went diagonally into the corner.
     """
-    if error is None:
-        return True
+    if corner['phase'] == 'approach' or error is None:
+        return True                         # driving up to the pivot point ignores the lane
     if corner['failed']:
         return abs(error) > 0.25            # only a lane ahead ends a failed search
     if corner['phase'] == 'first':
@@ -906,6 +943,9 @@ def main():
                 or not math.isfinite(args.corner_max_turn_deg)
                 or args.corner_max_turn_deg < 0.0
                 or args.corner_max_turn_deg > 120.0
+                or not math.isfinite(args.corner_pivot_distance)
+                or not (args.corner_pivot_distance == 0.0
+                        or args.stop_distance + 0.02 <= args.corner_pivot_distance <= 0.90)
                 or not math.isfinite(args.corner_min_turn_deg)
                 or args.corner_min_turn_deg < 0.0
                 or (args.corner_max_turn_deg > 0.0 and args.corner_min_turn_deg > args.corner_max_turn_deg)
@@ -917,6 +957,7 @@ def main():
                              'stop-distance >= 0.20 m, obstacle-min-width between 0.03 and 0.50 m, '
                              'corner-wall-distance 0 or between stop-distance+0.05 and 0.80 m, '
                              'corner-max-turn-deg between 0 and 120, '
+                             'corner-pivot-distance 0 or between stop-distance+0.02 and 0.90 m, '
                              'corner-min-turn-deg between 0 and corner-max-turn-deg, '
                              'crosswalk-stop-seconds >= 0 입니다.')
 

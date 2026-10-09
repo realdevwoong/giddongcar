@@ -91,7 +91,7 @@ def test_wall_ahead_with_straight_lane_turns_toward_lidar_open_side(drive):
     # 실물 16:53: 차선은 정면 벽을 향해 곧고(e≈0) 라이다가 벽을 본다 → 기어가지 않고 바로 회전
     for _ in range(5):
         drive(0.0)
-    linear, angular, reason = drive(0.0, wall=True, sides=(1.6, 0.3))
+    linear, angular, reason = drive(0.0, wall=True, sides=(1.6, 0.3), clear=0.4)
     assert linear == 0.0 and angular == pytest.approx(0.25)
     assert reason.startswith(vd.CORNER_REASON) and '왼쪽' in reason
 
@@ -99,12 +99,12 @@ def test_wall_ahead_with_straight_lane_turns_toward_lidar_open_side(drive):
 def test_lidar_tie_falls_back_to_camera_lean(drive):
     for _ in range(5):
         drive(0.12)
-    _, angular, reason = drive(0.12, wall=True, sides=(0.8, 0.8))
+    _, angular, reason = drive(0.12, wall=True, sides=(0.8, 0.8), clear=0.4)
     assert angular == pytest.approx(-0.25) and '오른쪽' in reason
 
 
 def test_pivot_holds_until_front_cone_is_clear(drive):
-    drive(0.0, wall=True, sides=(1.6, 0.3), clear=0.45)   # 왼쪽 회전 시작
+    drive(0.0, wall=True, sides=(1.6, 0.3), clear=0.4)    # 왼쪽 회전 시작
     for _ in range(12):                                   # 실물: 20°쯤 돌면 벽 판정이 풀리고 바닥이 넓게 보인다
         _, angular, reason = drive(0.0, wall=False, clear=0.6)
         assert angular == pytest.approx(0.25) and reason.startswith(vd.CORNER_REASON)
@@ -116,7 +116,7 @@ def test_pivot_holds_until_front_cone_is_clear(drive):
 
 def test_wall_corner_turns_at_least_min_angle_by_odom(drive):
     # 실물 17:15: 20~30°만 돌고 바닥이 넓게 보이자 전진해 코너 안쪽으로 파고들었다
-    drive(0.0, wall=True, sides=(1.6, 0.3), clear=0.45, heading=0.0)
+    drive(0.0, wall=True, sides=(1.6, 0.3), clear=0.4, heading=0.0)
     for degrees in (10, 25, 40, 55):                       # 차선이 앞에 있고 정면도 트였지만 아직 60° 전
         _, angular, reason = drive(0.0, wall=False, clear=2.0, heading=math.radians(degrees))
         assert angular == pytest.approx(0.25) and reason.startswith(vd.CORNER_REASON)
@@ -162,7 +162,7 @@ def test_pivot_exits_after_persistent_overshoot(drive):
 def test_closed_front_lane_lost_corner_also_turns_min_angle(drive):
     # 실물 18:39: 코너는 모두 '차선 소실'로 시작했다. 정면이 막혔으면 벽 코너와 같이 최소 60°
     drive(-0.1, heading=0.0)
-    drive(None, clear=0.5, heading=0.0)
+    drive(None, clear=0.4, heading=0.0)
     for degrees in (15, 25, 40):                          # 반대쪽에 차선이 보여도(25° 종료 사례) 아직 돈다
         assert drive(0.4, clear=2.0, heading=math.radians(degrees))[2].startswith(vd.CORNER_REASON)
     assert drive(-0.4, clear=2.0, heading=math.radians(50))[2].startswith(vd.CORNER_REASON)
@@ -174,7 +174,7 @@ def test_closed_corner_turns_to_lidar_corridor_heading(drive):
     # 실물 18:39:13: 40°에서 차선이 왼쪽(-0.40)에 보이고 정면 1.10 m라 끝내고 대각선으로 갔다
     drive.node.open_heading = lambda side, reach: side * math.radians(85.0)
     drive(0.0, heading=0.0)
-    drive(None, clear=0.6, heading=0.0)                   # 정면 막힘 + 차선 소실 → 목표 85°
+    drive(None, clear=0.4, heading=0.0)                   # 정면 막힘 + 차선 소실 → 목표 85°
     assert drive.node.corner['target'] == pytest.approx(math.radians(85.0))
     for degrees in (40, 60, 70):
         assert drive(-0.4, clear=1.1, heading=math.radians(degrees))[2].startswith(vd.CORNER_REASON)
@@ -186,7 +186,7 @@ def test_corridor_side_wins_when_side_clearances_are_close(drive):
     drive.node.open_heading = lambda side, reach: None if side > 0 else -math.radians(80.0)
     for _ in range(3):
         drive(-0.05)                                       # 카메라는 왼쪽으로 기울었지만
-    _, angular, reason = drive(None, clear=0.6, sides=(0.42, 0.35))
+    _, angular, reason = drive(None, clear=0.4, sides=(0.42, 0.35))
     assert angular < 0.0 and '오른쪽' in reason            # 오른쪽만 복도로 트임
 
 
@@ -270,3 +270,41 @@ def test_open_heading_needs_a_fresh_scan():
     node = _ray_scan(LEFT_TURN, 1.4, 0.0)
     node.scan_at -= 1.0
     assert vd.VisionDriveNode.open_heading(node, 1, 0.9) is None
+
+
+# ---- 코너: 복도 가운데쯤까지 직진한 뒤 회전 ----
+
+def test_closed_corner_drives_up_to_pivot_point_before_turning(drive):
+    # 실물 19:16: 벽이 0.45 m보다 멀 때 차선이 사라졌고, 그 자리에서 돌아 안쪽 선을 밟았다
+    drive.node.open_heading = lambda side, reach: side * math.radians(85.0)
+    drive(0.0, heading=0.0)
+    linear, angular, reason = drive(None, clear=0.7, heading=0.0)        # 정면 0.7 m에서 차선 소실
+    assert linear == pytest.approx(drive.args.max_linear) and angular == 0.0
+    assert reason.startswith(vd.CORNER_APPROACH_REASON)
+    assert drive(0.0, clear=0.6, heading=0.0)[1] == 0.0                 # 바닥이 넓게 보여도 차선은 안 본다
+    slow, _, _ = drive(None, clear=0.46, heading=0.0)
+    assert 0.0 < slow < drive.args.max_linear                           # 마지막 15 cm는 줄여서
+    linear, angular, reason = drive(None, clear=0.40, heading=0.0)       # 0.40 m: 제자리 회전 시작
+    assert linear == 0.0 and angular > 0.0 and reason.startswith(vd.CORNER_REASON)
+    assert drive.node.corner['target'] == pytest.approx(math.radians(85.0))
+
+
+def test_approach_stops_for_a_near_obstacle_or_after_time_cap(drive):
+    drive(0.0)
+    drive(None, clear=0.7)
+    _, angular, reason = drive(None, clear=0.7, front=0.37)             # 넓은 장애물이 0.37 m: 바로 회전
+    assert angular != 0.0 and reason.startswith(vd.CORNER_REASON)
+    drive.node.corner = None
+    drive(0.0, front=math.inf)
+    drive(None, clear=0.7)
+    _, angular, reason = drive(None, clear=0.7, dt=vd.CORNER_APPROACH_S + 0.1)   # 벽이 안 가까워져도 10초면 회전
+    assert angular != 0.0 and reason.startswith(vd.CORNER_REASON)
+
+
+def test_open_front_or_zero_pivot_distance_turns_at_once(drive):
+    drive(0.0)
+    assert drive(None)[2].startswith(vd.CORNER_REASON)                  # 정면이 트임(인식 끊김): 바로 다시 찾기
+    drive.node.corner = None
+    drive.args.corner_pivot_distance = 0.0
+    drive(0.0)
+    assert drive(None, clear=0.7)[2].startswith(vd.CORNER_REASON)       # 0이면 판단한 자리에서 회전
