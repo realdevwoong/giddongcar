@@ -142,6 +142,11 @@ class VisionDriveNode(Node):
         self.scan_at = time.monotonic()
 
     def front_range(self, max_age=0.5, half_angle=math.radians(22.5), min_width=0.12):
+        """Nearest substantial obstacle ahead in metres.
+
+        None means no fresh scan (stop). math.inf means the scan is fresh and
+        the front sector is clear, which must not be confused with a lost lidar.
+        """
         if self.scan is None or self.scan_at is None or time.monotonic() - self.scan_at > max_age:
             return None
         points = []
@@ -171,6 +176,11 @@ class VisionDriveNode(Node):
             previous_index, previous_xy = index, xy
         if current:
             clusters.append(current)
+        # A scan that starts at 0 rad splits the straight-ahead object across the
+        # end and the start of the array; join it so its width is not halved.
+        if (len(clusters) > 1 and points[0][0] == 0 and points[-1][0] == len(scan.ranges) - 1
+                and math.dist(clusters[0][0][0], clusters[-1][-1][0]) <= 0.06):
+            clusters[0] = clusters.pop() + clusters[0]
 
         obstacle_ranges = []
         for cluster in clusters:
@@ -179,7 +189,7 @@ class VisionDriveNode(Node):
             lateral_span = max(point[0][1] for point in cluster) - min(point[0][1] for point in cluster)
             if lateral_span >= min_width:
                 obstacle_ranges.extend(distance for _, distance in cluster)
-        return min(obstacle_ranges) if obstacle_ranges else None
+        return min(obstacle_ranges) if obstacle_ranges else math.inf
 
     def external_cmd_vel_publishers(self):
         return [info for info in self.get_publishers_info_by_topic('cmd_vel')
