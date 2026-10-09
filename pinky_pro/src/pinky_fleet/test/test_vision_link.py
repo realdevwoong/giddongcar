@@ -176,3 +176,17 @@ def test_dashboard_and_vision_drive_talk_over_ros():
             node.destroy_node()
         context.try_shutdown()
         robot.close()
+
+
+def test_watching_dashboard_refuses_to_spin_and_never_auto_spins():
+    robot = SimpleNamespace(drive=False)
+    with pytest.raises(CommandError) as error:
+        Robot.start_spin(robot)
+    assert error.value.code == 'drive_disabled'
+    with patch.dict(os.environ, ISOLATED):
+        real = Robot('probe', 81, auto_spin=True, drive=False)
+    try:
+        assert real.auto_spin is False and real.snapshot()['drive'] is False
+        assert not real.get_publishers_info_by_topic('/cmd_vel')
+    finally:
+        real.close()

@@ -48,6 +48,12 @@ def start(context):
     if auto_spin not in ('true', 'false'):
         raise RuntimeError('auto_spin은 true 또는 false여야 합니다')
     auto_spin = auto_spin == 'true'
+    # vision:=true — vision_drive가 로봇을 몬다. Nav2(cmd_vel을 내는 controller·behavior)는 띄우지 않고
+    # 지도와 위치(map_server + AMCL)만 띄운다. 관제도 cmd_vel을 만들지 않는다(돌면서 찾기·auto_spin 없음).
+    vision = LaunchConfiguration('vision', default='false').perform(context).lower()
+    if vision not in ('true', 'false'):
+        raise RuntimeError('vision은 true 또는 false여야 합니다')
+    vision = vision == 'true'
     # 시뮬 Nav2가 실물 로봇에 cmd_vel을 보내는 사고를 막는다. 실물 도메인이거나 실물용 DDS 설정이 남아 있으면 시작하지 않는다.
     if sim and set(domains) & set(REAL_DOMAINS):
         raise RuntimeError(f'Gazebo 모드에서는 실물 로봇 도메인 {REAL_DOMAINS[0]}/{REAL_DOMAINS[1]}을 쓸 수 없습니다: '
@@ -85,24 +91,27 @@ def start(context):
                 set_initial_pose=True, initial_pose=dict(x=pose[0], y=pose[1], z=0.0, yaw=pose[2]))
             robot_params = Path(temp.name) / f'nav2_params_robot{i}.yaml'
             robot_params.write_text(yaml.safe_dump(own, sort_keys=False))
+        stack = (['localization_launch.xml', f'map:={map_path}', f'params_file:={robot_params}', 'use_composition:=False']
+                 if vision else ['bringup_launch.xml', f'map:={map_path}', f'params_file:={robot_params}'])
         processes.append(ExecuteProcess(
-            cmd=['ros2', 'launch', 'pinky_navigation', 'bringup_launch.xml',
-                 f'map:={map_path}', f'params_file:={robot_params}']
+            cmd=['ros2', 'launch', 'pinky_navigation'] + stack
                 + (['use_sim_time:=True'] if sim else []),
             additional_env={'ROS_DOMAIN_ID': str(domain)}, output='screen'))
     dashboard = Path(get_package_prefix('pinky_fleet')) / 'lib' / 'pinky_fleet' / 'fleet_dashboard'
     processes.append(ExecuteProcess(
         cmd=[str(dashboard),
              '--robot1-domain', str(domains[0]), '--robot2-domain', str(domains[1]),
-             '--robot1-camera-host', LaunchConfiguration('robot1_camera_host', default='').perform(context),
-             '--robot2-camera-host', LaunchConfiguration('robot2_camera_host', default='').perform(context),
+             # vision 모드: 로봇 카메라는 vision_drive가 쓴다
+             '--robot1-camera-host', '' if vision else LaunchConfiguration('robot1_camera_host', default='').perform(context),
+             '--robot2-camera-host', '' if vision else LaunchConfiguration('robot2_camera_host', default='').perform(context),
              '--camera-port', LaunchConfiguration('camera_port', default='5000').perform(context),
              '--host', value('host'), '--port', value('port'), '--map', str(map_path)]
             + (['--use-sim-time'] if sim else [])
             # 위치를 알려 준 로봇은 전역 위치 찾기를 하지 않는다. 나머지는 대시보드가 켜지자마자 스스로 찾는다
             + [arg for i, pose in enumerate(poses, 1) if pose for arg in ('--known-pose', f'robot{i}')]
-            + (['--auto-spin'] if auto_spin else [])
-            + (['--traffic-zones', value('traffic_zones')] if value('traffic_zones') else []), output='screen'))
+            + (['--no-drive'] if vision else (['--auto-spin'] if auto_spin else []))
+            + (['--traffic-zones', value('traffic_zones')] if value('traffic_zones') and not vision else []),
+        output='screen'))
     handlers = [RegisterEventHandler(OnProcessExit(
         target_action=p, on_exit=[EmitEvent(event=Shutdown(reason='A fleet process exited'))]))
         for p in processes]
@@ -141,5 +150,8 @@ def generate_launch_description():
         DeclareLaunchArgument('traffic_zones', default_value=str(fleet / 'params' / 'traffic_good3.yaml'),
                               description='교통 정리 구역 YAML(좁은 문에 한 대씩). 비우면(traffic_zones:=) 끈다. '
                                           '지도가 구역 파일과 다르면 대시보드가 스스로 끈다'),
+        DeclareLaunchArgument('vision', default_value='false',
+                              description='true: vision_drive가 로봇을 몬다. Nav2 대신 지도·위치(map_server + AMCL)만 띄우고 '
+                                          '관제는 cmd_vel을 내지 않는다(돌면서 찾기 없음). 위치는 ↗ 초기 위치나 robot1_initial_pose로'),
         OpaqueFunction(function=start),
     ])

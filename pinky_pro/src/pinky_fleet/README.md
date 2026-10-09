@@ -230,22 +230,24 @@ ros2 run pinky_fleet vision_drive --robot-ip 192.168.0.6 \
 
 ### 관제 웹에서 vision_drive 보기
 
-`vision_drive`는 같은 도메인에 영상 창 화면(`vision_drive/overlay/compressed`)과 판단 상태 JSON(`vision_drive/state`)을 내보내고, `vision_drive/command`로 관제의 출발·정지 신호를 받습니다. 로봇을 직접 모는 동안 관제 웹은 **Nav2 없이 대시보드만** 띄웁니다. 대시보드는 제자리 회전 버튼을 누르기 전에는 `cmd_vel`을 만들지 않아 `vision_drive`를 막지 않습니다.
+`vision_drive`는 같은 도메인에 영상 창 화면(`vision_drive/overlay/compressed`)과 판단 상태 JSON(`vision_drive/state`)을 내보내고, `vision_drive/command`로 관제의 출발·정지 신호를 받습니다. 로봇을 직접 모는 동안에는 `cmd_vel`을 내는 Nav2(controller·behavior)를 띄우면 안 됩니다. `vision:=true`는 로봇마다 **지도와 위치(map_server + AMCL)만** 띄우고, 대시보드도 `cmd_vel`을 만들지 않게(`--no-drive`: 돌면서 찾기·auto_spin 없음, 카메라·교통 정리 끔) 켭니다.
 
 ```bash
 # 터미널 A: vision_drive (위의 감독형 주행 명령 그대로). 시작하면 정지한 채 출발 신호를 기다린다
-# 터미널 B: 대시보드만. 도메인 기본값 15/17, http://localhost:8080
+# 터미널 B: 지도·실시간 위치 + 관제 웹. 도메인 기본값 15/17, http://localhost:8080
 source /opt/ros/jazzy/setup.bash && source ~/giddongcar/pinky_pro/install/setup.bash
-export ROS_STATIC_PEERS="<로봇1 IP>;<로봇2 IP>"   # 카드에 로봇 연결 상태(odom)까지 보려면
-ros2 run pinky_fleet fleet_dashboard
+export ROS_STATIC_PEERS="<로봇1 IP>;<로봇2 IP>"   # 로봇 scan·odom·TF를 받아야 위치가 잡힌다
+ros2 launch pinky_fleet multi_robot.launch.py vision:=true
 ```
+
+- 실시간 위치는 AMCL이 잡습니다. 켜자마자 지도 전체에서 가만히 찾고, 로봇이 달리면 대개 잡힙니다. 바로 보려면 웹의 **↗ 초기 위치**로 지금 자리와 방향을 찍거나, 출발 자리가 늘 같으면 `robot1_initial_pose:=x,y,yaw`를 붙입니다. 위치가 잡히면 지도에 로봇이 움직입니다.
+- 대시보드만 띄워도(`ros2 run pinky_fleet fleet_dashboard`) 영상과 출발·정지는 되지만, 지도는 YAML 그림만 뜨고 위치는 안 나옵니다.
 
 - 로봇 카드 아래에 영상 창과 같은 화면(차선 mask, 조향점, 상태 글자)이 뜹니다.
 - 주황 띠는 출발 신호를 기다린다는 뜻입니다(시작, 횡단보도, 정지). 화면을 보고 **▶ 출발**을 누르면 그 대기(`#번호`)만 풀립니다. 그 사이 다른 대기로 바뀌었으면 거절하고 다시 보라고 알려 줍니다.
 - **■ 정지**는 ▶ 출발을 누를 때까지 세웁니다. 비상 정지가 아니므로 로봇 옆 감독자는 그대로 둡니다.
-- 대시보드 카메라 주소(`--robot1-camera-host`)는 비워 둡니다. 로봇 카메라는 `vision_drive`가 씁니다.
 - 대기가 생기고 풀릴 때마다 오른쪽 이벤트 기록에 남습니다.
-- Nav2가 없으므로 지도는 대시보드가 지도 YAML(기본 `maps/good3.yaml`, `--map`으로 변경)을 직접 읽어 보여 줍니다. 로봇 위치는 추정하지 않습니다(카드: 위치 없음). Nav2를 켜면 map_server의 `/map`이 우선입니다.
+- map_server가 `/map`을 보내기 전(또는 대시보드만 띄웠을 때)에는 대시보드가 지도 YAML(기본 `maps/good3.yaml`, `--map`)을 직접 읽어 보여 줍니다.
 - 두 터미널의 DDS 설정(`RMW_IMPLEMENTATION`, peer 설정)이 같아야 합니다. Cyclone XML로 multicast를 끄고 `<Peers>`에 로봇만 적었다면 같은 PC의 두 프로세스가 서로 못 찾습니다. `<Peer Address="localhost"/>`를 넣으세요(2026-10-09 이 PC에서 확인).
 
 ### 모델

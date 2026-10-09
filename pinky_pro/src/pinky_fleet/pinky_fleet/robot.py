@@ -47,7 +47,7 @@ def finite_json(value):
 
 
 class Robot(Node):
-    def __init__(self, name, domain, use_sim_time=False, known_pose=False, auto_spin=False):
+    def __init__(self, name, domain, use_sim_time=False, known_pose=False, auto_spin=False, drive=True):
         self.ros_context = Context()
         rclpy.init(context=self.ros_context, domain_id=domain)
         # 시뮬 시간이면 now()가 /clock을 따라가서 Gazebo TF 스탬프가 2초 신선도 검사를 통과한다.
@@ -71,7 +71,9 @@ class Robot(Node):
         self.lamp_future = None   # 아직 답을 기다리는 램프 요청
         # 전역 위치 찾기. launch가 초기 위치를 알려 준 로봇(시뮬)은 끈다
         self.localizer = Localizer(known=known_pose)
-        self.auto_spin = auto_spin   # 전역 찾기를 시작하자마자 제자리에서 한 바퀴 돈다(사람 확인 없이)
+        # drive=False: vision_drive가 로봇을 모는 중. 관제는 cmd_vel을 만들지 않고 돌지도 않는다(위치만 본다)
+        self.drive = drive
+        self.auto_spin = auto_spin and drive   # 전역 찾기를 시작하자마자 제자리에서 한 바퀴 돈다(사람 확인 없이)
         self.odom_yaw = None
         self.amcl_active = False  # AMCL lifecycle이 active인 걸 봤다
         self.loc_future, self.loc_sent = None, 0.0   # 아직 답을 기다리는 AMCL 요청 (future, client), 보낸 시각
@@ -417,7 +419,8 @@ class Robot(Node):
                         localize=self.localizer.snapshot(),
                         path=self.path if online else [], status=label, nav=nav, lamp=self.lamp,
                         clock_skew=round(getattr(self, 'clock_skew', 0.0), 2) if online else None,
-                        nav_ready=self.navigator.server_is_ready(), vision=self.vision_view())
+                        nav_ready=self.navigator.server_is_ready(), vision=self.vision_view(),
+                        drive=getattr(self, 'drive', True))
 
     def command(self, action, body):
         # Serialize HTTP requests per robot; the ROS executor remains independent.
@@ -496,6 +499,9 @@ class Robot(Node):
 
     def start_spin(self):
         """전역 찾기를 새로 뿌리고 제자리에서 한 바퀴 돈다. 사람이 로봇 주변을 보고 누르는 버튼에서만 부른다."""
+        if not self.drive:
+            raise CommandError('vision_drive가 모는 중이라 관제는 로봇을 돌리지 않아요. ↗ 초기 위치로 잡으세요.',
+                               'drive_disabled')
         state = self.snapshot()
         if not state['online']:
             raise CommandError('로봇 연결이 끊겨 있어요.', 'offline')

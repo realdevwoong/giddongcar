@@ -151,7 +151,7 @@ class DashboardSpinTests(unittest.TestCase):
     def test_spin_refused_while_navigating_or_offline(self):
         for online, active, code in ((False, False, 'offline'), (True, True, 'nav_active')):
             with self.subTest(code):
-                robot = SimpleNamespace(lock=threading.RLock(), localizer=Localizer(),
+                robot = SimpleNamespace(lock=threading.RLock(), localizer=Localizer(), drive=True,
                                         snapshot=lambda: dict(online=online, nav=dict(active=active)))
                 with self.assertRaises(CommandError) as caught:
                     Robot.start_spin(robot)

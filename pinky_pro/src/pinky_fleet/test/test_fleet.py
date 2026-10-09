@@ -517,15 +517,20 @@ class FleetTests(unittest.TestCase):
 
     def test_dashboard_sim_time_flag_reaches_both_robots(self):
         self.assertEqual(self.run_dashboard('--use-sim-time').call_args_list,
-                         [call('robot1', 15, True, False, False), call('robot2', 17, True, False, False)])
+                         [call('robot1', 15, True, False, False, drive=True), call('robot2', 17, True, False, False, drive=True)])
         self.assertEqual(self.run_dashboard().call_args_list,
-                         [call('robot1', 15, False, False, False), call('robot2', 17, False, False, False)])
+                         [call('robot1', 15, False, False, False, drive=True), call('robot2', 17, False, False, False, drive=True)])
         self.assertEqual(self.run_dashboard('--auto-spin').call_args_list,
-                         [call('robot1', 15, False, False, True), call('robot2', 17, False, False, True)])
+                         [call('robot1', 15, False, False, True, drive=True), call('robot2', 17, False, False, True, drive=True)])
+
+    def test_no_drive_flag_reaches_both_robots(self):
+        self.assertEqual(self.run_dashboard('--no-drive', '--auto-spin').call_args_list,
+                         [call('robot1', 15, False, False, True, drive=False),
+                          call('robot2', 17, False, False, True, drive=False)])
 
     def test_known_pose_flag_skips_global_localization_for_that_robot(self):
         self.assertEqual(self.run_dashboard('--known-pose', 'robot2').call_args_list,
-                         [call('robot1', 15, False, False, False), call('robot2', 17, False, True, False)])
+                         [call('robot1', 15, False, False, False, drive=True), call('robot2', 17, False, True, False, drive=True)])
 
     def test_robot_node_follows_sim_clock_when_asked(self):
         # 진짜 노드를 하나 만든다(이 PC 안에서만, 안 쓰는 도메인). /clock을 따라가는 ROS 시간이 켜져야 한다.
@@ -765,7 +770,8 @@ REAL, SIM = ('15', '17'), ('25', '27')  # 도메인: 실물, 시뮬
 
 
 class LaunchTests(unittest.TestCase):
-    def start(self, use_sim_time, domains, env=ISOLATED, poses=('', ''), traffic_zones='', auto_spin='false'):
+    def start(self, use_sim_time, domains, env=ISOLATED, poses=('', ''), traffic_zones='', auto_spin='false',
+              vision=None):
         spec = importlib.util.spec_from_file_location('multi_robot_launch', LAUNCH_FILE)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -780,6 +786,8 @@ class LaunchTests(unittest.TestCase):
             robot1_domain=domains[0], robot2_domain=domains[1], host='127.0.0.1', port='8080',
             use_sim_time=use_sim_time, robot1_initial_pose=poses[0], robot2_initial_pose=poses[1],
             traffic_zones=traffic_zones, auto_spin=auto_spin)
+        if vision is not None:
+            context.launch_configurations['vision'] = vision
         with patch.dict(os.environ, env):
             actions = module.start(context)
         self.actions = actions  # 살려 둬야 임시 params 파일이 지워지지 않는다
@@ -807,6 +815,24 @@ class LaunchTests(unittest.TestCase):
                                    '--camera-port', '5000',
                                    '--host', '127.0.0.1', '--port', '8080',
                                    '--map', str((LAUNCH_FILE.parents[1] / 'maps' / 'good3.yaml').resolve())])
+
+    def test_vision_mode_runs_only_map_and_amcl_and_a_watching_dashboard(self):
+        # vision_drive가 몰 때: cmd_vel을 내는 Nav2 노드·관제 회전이 있으면 vision_drive가 주행을 거부한다
+        cmds, domains = self.start('false', REAL, env={}, traffic_zones='/zones.yaml', auto_spin='true',
+                                   vision='true')
+        self.assertEqual(domains, ['15', '17', None])
+        for cmd in cmds[:2]:
+            self.assertEqual(cmd[:4], ['ros2', 'launch', 'pinky_navigation', 'localization_launch.xml'])
+            self.assertIn('use_composition:=False', cmd)
+            self.assertTrue(cmd[4].startswith('map:=') and cmd[5].startswith('params_file:='))
+        dashboard = cmds[2]
+        self.assertIn('--no-drive', dashboard)
+        self.assertNotIn('--auto-spin', dashboard)
+        self.assertNotIn('--traffic-zones', dashboard)
+        for flag in ('--robot1-camera-host', '--robot2-camera-host'):   # 카메라는 vision_drive가 쓴다
+            self.assertEqual(dashboard[dashboard.index(flag) + 1], '')
+        with self.assertRaises(RuntimeError):
+            self.start('false', REAL, env={}, vision='yes')
 
     def test_generated_params_wait_for_initial_pose(self):
         cmds, _ = self.start('false', REAL, env={})
