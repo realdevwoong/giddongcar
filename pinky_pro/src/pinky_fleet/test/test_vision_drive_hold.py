@@ -65,8 +65,8 @@ def test_crosswalk_holds_until_go_with_matching_id(drive):
     assert not go(drive, 2)                                # 화면에서 본 대기가 아니면 무시
     assert drive(CROSSWALK)[:2] == (0.0, 0.0)
     assert go(drive, 1)
-    linear, _, reason = drive(CROSSWALK)
-    assert linear > 0 and reason == '횡단보도 통과'
+    linear, angular, reason = drive(CROSSWALK)
+    assert linear > 0 and angular == 0.0 and reason == '횡단보도 직진 통과'
 
 
 def test_crossing_dropouts_keep_going_and_next_crosswalk_holds_again(drive):
@@ -117,6 +117,8 @@ def test_stop_then_go_still_waits_fixed_time(drive):
     assert drive(CROSSWALK, dt=5.0)[0] == 0.0
     linear, _, reason = drive(CROSSWALK, dt=5.1)
     assert linear > 0 and reason == '횡단보도 대기 완료'
+    linear, angular, reason = drive(CROSSWALK, error=0.4)  # 기다린 뒤에도 직진으로 건넌다
+    assert linear > 0 and angular == 0.0 and reason == '횡단보도 직진 통과'
 
 
 def test_overlay_status_shows_hold_in_ascii():
@@ -165,7 +167,29 @@ def test_drive_node_starts_held_and_takes_go_over_ros():
 
 def test_first_crosswalk_frame_is_not_called_crossing(drive):
     linear, _, reason = drive(CROSSWALK)                   # 아직 대기 전 한 프레임: '통과'라고 하지 않는다
-    assert linear > 0 and reason != '횡단보도 통과'
+    assert linear > 0 and '통과' not in reason
+
+
+def test_released_crosswalk_is_crossed_straight(drive):
+    # 실물 18:59: 출발 신호 뒤 차선+횡단보도 mask를 따라 5초간 오른쪽으로 꺾어 벽 0.15 m까지 갔다
+    drive(CROSSWALK)
+    drive(CROSSWALK)
+    assert go(drive, 1)
+    for error in (0.4, 0.3, None, 0.35):                   # 오른쪽으로 끄는 조향값, 차선 소실 프레임도
+        linear, angular, reason = drive(CROSSWALK, error=error)
+        assert linear > 0 and angular == 0.0 and reason == '횡단보도 직진 통과'
+    assert drive.node.__dict__.get('corner') is None       # 건너는 중에 코너 회전을 시작하지 않는다
+    assert drive(error=0.4)[1] == 0.0                     # 한 프레임 놓쳐도 0.5초는 직진
+    _, angular, reason = drive(dt=0.6, error=0.4)          # 지나간 뒤에는 다시 차선 조향
+    assert angular < 0.0 and '횡단보도' not in reason
+
+
+def test_crossing_still_stops_for_an_obstacle(drive):
+    drive(CROSSWALK)
+    drive(CROSSWALK)
+    go(drive, 1)
+    drive.node.front_range = lambda min_width: 0.30
+    assert drive(CROSSWALK)[:2] == (0.0, 0.0)
 
 
 def test_state_with_nan_is_skipped_not_raised():

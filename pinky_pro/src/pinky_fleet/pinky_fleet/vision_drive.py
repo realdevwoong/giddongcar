@@ -483,6 +483,7 @@ HOLD_TEXT = {'start': '출발 신호 대기', 'crosswalk': '횡단보도: 출발
 HOLD_ASCII = {'start': 'START', 'crosswalk': 'CROSSWALK', 'operator': 'STOPPED'}
 CROSSWALK_GAP = 2.0       # s without the crosswalk in path before it counts as passed
 CROSSWALK_FRAMES = 2      # consecutive in-path frames before a crosswalk holds (one-frame false hits)
+CROSSING_SEEN_S = 0.5     # keep crossing straight while the crosswalk was in path this recently
 
 
 def _hold_reason(hold):
@@ -774,9 +775,16 @@ def _policy(node, mask, detections, args, inference_at, camera_at):
     hold = getattr(node, 'hold', None)
     if hold is not None:
         return 0.0, 0.0, _hold_reason(hold)
-    error = _lane_error(mask)
+    # Released crosswalk: cross it straight. The crosswalk is wider than the lane, so
+    # steering on lane+crosswalk pulled the robot ~55 degrees right on 2026-10-09
+    # 18:59 and left it 0.15 m from the right wall. Lane steering resumes once past.
+    crossing = (args.crosswalk_action in ('wait-signal', 'stop-then-go') and crosswalk['released']
+                and crosswalk['seen_at'] is not None and now - crosswalk['seen_at'] <= CROSSING_SEEN_S)
+    error = 0.0 if crossing else _lane_error(mask)
     corner = getattr(node, 'corner', None)
-    if corner is not None:
+    if crossing:
+        pass
+    elif corner is not None:
         if _corner_keeps_turning(node, args, corner, error, now):
             return _corner_pivot(node, args, now)
         turned = math.degrees(_corner_turned(node, corner, now, args))
@@ -787,15 +795,16 @@ def _policy(node, mask, detections, args, inference_at, camera_at):
         node.corner = None
     elif error is None:
         return _corner_pivot(node, args, now)
-    history = getattr(node, 'lane_error_history', [])
-    history.append((now, error))
-    node.lane_error_history = [item for item in history if now - item[0] <= 2.0]
+    if not crossing:
+        history = getattr(node, 'lane_error_history', [])
+        history.append((now, error))
+        node.lane_error_history = [item for item in history if now - item[0] <= 2.0]
     front = node.front_range(min_width=args.obstacle_min_width)
     if args.mode == 'drive' and front is None:
         return 0.0, 0.0, '라이다 입력 없음/지연: 정지'
     # The lane points straight at a course wall that fills the front: a corner.
     # Turn now instead of crawling up to the wall until the lane disappears.
-    if (args.corner_wall_distance > 0.0 and abs(error) <= 0.25
+    if (not crossing and args.corner_wall_distance > 0.0 and abs(error) <= 0.25
             and now >= getattr(node, 'corner_blocked_until', 0.0)
             and node.wall_ahead(args.corner_wall_distance)):
         return _corner_pivot(node, args, now, trigger=f'정면 벽 {front:.2f} m')
@@ -819,6 +828,7 @@ def _policy(node, mask, detections, args, inference_at, camera_at):
                     remaining = max(0.0, args.crosswalk_stop_seconds - elapsed)
                     return 0.0, 0.0, f'횡단보도 대기: {remaining:.1f}초'
                 crosswalk_released = True
+                crosswalk['released'] = True    # from the next frame: cross straight
             if args.crosswalk_action == 'wait-signal' and crosswalk['released']:
                 crosswalk_released = True   # held above until the go signal; now crossing
             slow_crosswalk = args.crosswalk_action == 'slow'
@@ -846,6 +856,8 @@ def _policy(node, mask, detections, args, inference_at, camera_at):
         obstacle_limited = True
     if slow_crosswalk:
         reason = '횡단보도 감속'
+    elif crossing:
+        reason = f'횡단보도 직진 통과{f" (전방 {front:.2f} m 감속)" if obstacle_limited else ""}'
     elif obstacle_limited:
         reason = f'전방 근접 감속 {front:.2f} m'
     elif turn_limited:
