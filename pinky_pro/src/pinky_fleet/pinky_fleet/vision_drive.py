@@ -4,6 +4,11 @@ This tool is intentionally separate from the fleet dashboard. Its default
 ``observe`` mode never publishes velocity commands. ``drive`` is an attended,
 low-speed experiment that requires an explicit confirmation and a verified
 robot-side cmd_vel watchdog.
+
+The dashboard watches it over relative ROS topics in the robot's domain:
+``vision_drive/overlay/compressed`` (the window image), ``vision_drive/state``
+(JSON policy and hold) and ``vision_drive/command`` (JSON go/stop from the web).
+A drive run starts held, and a crosswalk holds again until a go signal arrives.
 """
 import argparse
 from datetime import datetime
@@ -24,7 +29,8 @@ from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
-from sensor_msgs.msg import LaserScan
+from sensor_msgs.msg import CompressedImage, LaserScan
+from std_msgs.msg import String
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from pinky_fleet.camera_control import PinkyCameraControl
@@ -51,8 +57,10 @@ def parse_args(argv=None):
                         default='person,bicycle,car,motorcycle,bus,truck,bench,backpack,suitcase,chair',
                         help='보이면 정지할 탐지 클래스명, 쉼표 구분')
     parser.add_argument('--crosswalk-class', default='crosswalk')
-    parser.add_argument('--crosswalk-action', choices=('slow', 'stop', 'stop-then-go', 'ignore'),
-                        default='stop-then-go')
+    parser.add_argument('--crosswalk-action', choices=('wait-signal', 'slow', 'stop', 'stop-then-go', 'ignore'),
+                        default='wait-signal',
+                        help='wait-signal: 횡단보도에서 멈추고 관제 웹 ▶ 출발(또는 영상 창 g)을 받아야 다시 간다. '
+                             'stop-then-go: --crosswalk-stop-seconds 동안 멈춘 뒤 스스로 간다')
     parser.add_argument('--crosswalk-stop-seconds', type=float, default=10.0,
                         help='stop-then-go 모드에서 횡단보도 감지 후 정지할 시간')
     parser.add_argument('--mode', choices=('observe', 'drive'), default='observe')
@@ -159,6 +167,17 @@ class VisionDriveNode(Node):
         self._odom_raw = None
         self.create_subscription(Odometry, 'odom', self._on_odom, qos_profile_sensor_data)
         self.command_pub = self.create_publisher(Twist, 'cmd_vel', 10) if mode == 'drive' else None
+        # A drive run never moves on its own: it starts held until a go signal.
+        self.hold = None
+        self.hold_seq = 0
+        if mode == 'drive':
+            _hold(self, 'start', time.monotonic(), '시작')
+        self.crosswalk = dict(started_at=None, seen_at=None, frames=0, released=False)
+        # Dashboard link (same ROS domain): what the window shows, the policy, and go/stop.
+        self.overlay_pub = self.create_publisher(CompressedImage, 'vision_drive/overlay/compressed',
+                                                 qos_profile_sensor_data)
+        self.state_pub = self.create_publisher(String, 'vision_drive/state', qos_profile_sensor_data)
+        self.create_subscription(String, 'vision_drive/command', self._on_command, 10)
 
     def _on_scan(self, message):
         self.scan = message
@@ -171,6 +190,27 @@ class VisionDriveNode(Node):
             self.scan_yaw = yaw(transform.transform.rotation)
             LOGGER.info('라이다 방향: %s 은(는) base_link 기준 %.0f도 돌아가 있음',
                         message.header.frame_id, math.degrees(self.scan_yaw))
+
+    def _on_command(self, message):
+        _command(self, message.data, time.monotonic())
+
+    def publish_overlay(self, overlay):
+        if self.overlay_pub.get_subscription_count() == 0:
+            return
+        ok, encoded = cv2.imencode('.jpg', overlay, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        if not ok:
+            return
+        message = CompressedImage(format='jpeg', data=encoded.tobytes())
+        message.header.stamp = self.get_clock().now().to_msg()
+        self.overlay_pub.publish(message)
+
+    def publish_state(self, state):
+        try:
+            data = json.dumps(state, ensure_ascii=False, allow_nan=False)
+        except (TypeError, ValueError) as exc:    # a NaN must not stop the drive loop
+            LOGGER.warning('관제 상태 발행 생략: %s', exc)
+            return
+        self.state_pub.publish(String(data=data))
 
     def _on_odom(self, message):
         heading = yaw(message.pose.pose.orientation)
@@ -387,8 +427,10 @@ def _lane_error(mask):
     return (lane_center - x_center) / max(1.0, width / 2.0)
 
 
-def _overlay_status(command):
+def _overlay_status(command, hold=None):
     """ASCII status line; OpenCV Hershey fonts draw Korean reasons as '???'."""
+    if hold is not None:
+        return f"WAIT GO #{hold['id']} {HOLD_ASCII[hold['reason']]} (g / web)"
     linear, angular, _ = command
     if linear > 0:
         return f'GO v={linear:.2f} w={angular:+.2f}'
@@ -409,6 +451,94 @@ def _detections(result):
         x1, y1, x2, y2 = (float(value) for value in box.xyxy[0].tolist())
         output.append((label, confidence, x1, y1, x2, y2))
     return output
+
+
+# Why the robot waits for a go signal. Korean for logs and the web, ASCII for the OpenCV window.
+HOLD_TEXT = {'start': '출발 신호 대기', 'crosswalk': '횡단보도: 출발 신호 대기', 'operator': '정지: 출발 신호 대기'}
+HOLD_ASCII = {'start': 'START', 'crosswalk': 'CROSSWALK', 'operator': 'STOPPED'}
+CROSSWALK_GAP = 2.0       # s without the crosswalk in path before it counts as passed
+CROSSWALK_FRAMES = 2      # consecutive in-path frames before a crosswalk holds (one-frame false hits)
+
+
+def _hold_reason(hold):
+    return f"{HOLD_TEXT[hold['reason']]} #{hold['id']}"
+
+
+def _hold(node, reason, now, source=''):
+    """Stop and wait for a go signal. An existing hold stays as it is."""
+    if getattr(node, 'hold', None) is None:
+        node.hold_seq = getattr(node, 'hold_seq', 0) + 1
+        node.hold = dict(id=node.hold_seq, reason=reason, since=now)
+        LOGGER.warning('%s%s', _hold_reason(node.hold), f' ({source})' if source else '')
+    return node.hold
+
+
+def _release(node, hold_id, now, source):
+    """Go signal for hold `hold_id`.
+
+    The id is the hold the operator saw on screen. A different id means the robot
+    has stopped again since (another crosswalk), so the signal is ignored.
+    """
+    hold = getattr(node, 'hold', None)
+    if hold is None or hold['id'] != hold_id:
+        LOGGER.warning('출발 신호 무시(%s): 대기 #%s 아님 (지금 %s)', source, hold_id,
+                       _hold_reason(hold) if hold else '대기 없음')
+        return False
+    node.hold = None
+    crosswalk = _crosswalk_state(node)
+    if crosswalk['seen_at'] is not None:
+        crosswalk['released'] = True        # this crosswalk is cleared: no new stop while crossing it
+    corner = getattr(node, 'corner', None)
+    if corner is not None:
+        # The pivot was paused: do not count the wait against its time limits.
+        held = now - hold['since']
+        corner['started_at'] += held
+        corner['phase_at'] += held
+    LOGGER.info('출발 신호(%s): %s 해제, %.1f초 대기', source, _hold_reason(hold), now - hold['since'])
+    return True
+
+
+def _command(node, text, now):
+    """JSON command from the dashboard: {"action": "go", "hold": <id>} or {"action": "stop"}."""
+    try:
+        command = json.loads(text)
+        action = command['action']
+    except (ValueError, TypeError, KeyError):
+        LOGGER.warning('알 수 없는 관제 명령: %r', str(text)[:80])
+        return False
+    if action == 'go':
+        hold_id = command.get('hold')
+        if isinstance(hold_id, bool) or not isinstance(hold_id, int):
+            LOGGER.warning('관제 출발 신호에 대기 번호가 없음: %r', str(text)[:80])
+            return False
+        return _release(node, hold_id, now, '관제')
+    if action == 'stop':
+        _hold(node, 'operator', now, '관제')
+        return True
+    LOGGER.warning('알 수 없는 관제 명령: %r', str(text)[:80])
+    return False
+
+
+def _crosswalk_state(node):
+    state = getattr(node, 'crosswalk', None)
+    if state is None:
+        state = node.crosswalk = dict(started_at=None, seen_at=None, frames=0, released=False)
+    return state
+
+
+def _track_crosswalk(node, seen, now):
+    """One crosswalk episode: from the first in-path frame until it is gone for CROSSWALK_GAP."""
+    state = _crosswalk_state(node)
+    if seen:
+        if state['started_at'] is None:
+            state['started_at'] = now
+        state['seen_at'] = now
+        state['frames'] += 1
+    else:
+        state['frames'] = 0
+        if state['seen_at'] is not None and now - state['seen_at'] > CROSSWALK_GAP:
+            state.update(started_at=None, seen_at=None, released=False)
+    return state
 
 
 CORNER_REASON = '코너 제자리 회전'
@@ -580,17 +710,16 @@ def _policy(node, mask, detections, args, inference_at, camera_at):
             crosswalk_seen = True
 
     now = time.monotonic()
-    if crosswalk_seen:
-        if getattr(args, '_crosswalk_started_at', None) is None:
-            args._crosswalk_started_at = now
-        args._crosswalk_last_seen_at = now
-    elif (getattr(args, '_crosswalk_last_seen_at', None) is not None
-          and now - args._crosswalk_last_seen_at > 0.75):
-        args._crosswalk_started_at = None
-        args._crosswalk_last_seen_at = None
+    crosswalk = _track_crosswalk(node, crosswalk_seen, now)
+    if (args.crosswalk_action == 'wait-signal' and crosswalk['frames'] >= CROSSWALK_FRAMES
+            and not crosswalk['released']):
+        _hold(node, 'crosswalk', now)
 
     if time.monotonic() - inference_at > 0.5 or camera_at is None or camera_at > 0.5:
         return 0.0, 0.0, '카메라/인식 지연: 정지'
+    hold = getattr(node, 'hold', None)
+    if hold is not None:
+        return 0.0, 0.0, _hold_reason(hold)
     error = _lane_error(mask)
     corner = getattr(node, 'corner', None)
     if corner is not None:
@@ -631,11 +760,13 @@ def _policy(node, mask, detections, args, inference_at, camera_at):
             if args.crosswalk_action == 'stop':
                 return 0.0, 0.0, '횡단보도: 정지 정책'
             if args.crosswalk_action == 'stop-then-go':
-                elapsed = now - args._crosswalk_started_at
+                elapsed = now - crosswalk['started_at']
                 if elapsed < args.crosswalk_stop_seconds:
                     remaining = max(0.0, args.crosswalk_stop_seconds - elapsed)
                     return 0.0, 0.0, f'횡단보도 대기: {remaining:.1f}초'
                 crosswalk_released = True
+            if args.crosswalk_action == 'wait-signal' and crosswalk['released']:
+                crosswalk_released = True   # held above until the go signal; now crossing
             slow_crosswalk = args.crosswalk_action == 'slow'
 
     linear = min(args.max_linear, 0.02 if slow_crosswalk else args.max_linear)
@@ -666,7 +797,7 @@ def _policy(node, mask, detections, args, inference_at, camera_at):
     elif turn_limited:
         reason = '코너 감속·조향'
     elif crosswalk_released:
-        reason = '횡단보도 대기 완료'
+        reason = '횡단보도 통과' if args.crosswalk_action == 'wait-signal' else '횡단보도 대기 완료'
     else:
         reason = '차선 영역 추종'
     return linear, angular, reason
@@ -767,6 +898,7 @@ def main():
             if node.front_range(min_width=args.obstacle_min_width) is None:
                 raise RuntimeError('라이다 /scan이 아직 유효하지 않습니다. 로봇 ROS 도메인과 토픽을 확인하세요.')
             LOGGER.warning('감독형 저속 주행 실험 시작. 즉시 정지하려면 창에서 q를 누르세요.')
+            LOGGER.warning('출발 신호를 기다립니다: 영상 창에서 g, 또는 관제 웹 카드의 ▶ 출발 (space = 정지)')
 
         inference_at = 0.0
         last_frame_sequence = -1
@@ -777,6 +909,8 @@ def main():
         last_latency_ms = None
         current_command = (0.0, 0.0, '초기화')
         last_control_at = 0.0
+        last_state_at = 0.0
+        lane_error = None
         device = None if args.device == 'auto' else args.device
         while rclpy.ok():
             rclpy.spin_once(node, timeout_sec=0.0)
@@ -809,14 +943,15 @@ def main():
                     cv2.line(overlay, (width // 2, preview_y), (preview_x, preview_y),
                              (255, 0, 255), 2)
                 color = (0, 220, 0) if current_command[0] > 0 else (0, 0, 255)
-                cv2.putText(overlay, _overlay_status(current_command), (8, 22), cv2.FONT_HERSHEY_SIMPLEX,
-                            0.52, color, 2, cv2.LINE_AA)
+                cv2.putText(overlay, _overlay_status(current_command, node.hold), (8, 22),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.52, color, 2, cv2.LINE_AA)
                 cv2.putText(overlay, 'OBSERVE ONLY' if args.mode == 'observe' else
                             f'VERIFIED DRIVE  v={current_command[0]:.2f}',
                             (8, 44), cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 1, cv2.LINE_AA)
                 if video_writers:
                     cv2.putText(overlay, 'REC', (overlay.shape[1] - 52, 22), cv2.FONT_HERSHEY_SIMPLEX,
                                 0.6, (0, 0, 255), 2, cv2.LINE_AA)
+                node.publish_overlay(overlay)
                 names = ', '.join(sorted({item[0] for item in detections})) or '탐지 없음'
                 LOGGER.info('mode=%s policy=%s command=(v=%.3f,w=%.3f) detections=%s inference=%.1fms',
                             args.mode, current_command[2], current_command[0], current_command[1],
@@ -829,6 +964,9 @@ def main():
 
             if args.mode == 'drive' and time.monotonic() - last_control_at >= 0.1:
                 linear, angular, reason = current_command
+                if node.hold is not None:
+                    # A stop from the web takes effect now, not at the next camera frame.
+                    linear, angular, reason = 0.0, 0.0, _hold_reason(node.hold)
                 if time.monotonic() - inference_at > 0.5 or camera_age is None or camera_age > 0.5:
                     linear, angular, reason = 0.0, 0.0, '카메라/인식 지연: 정지'
                 linear, angular, reason = _drive_guard(
@@ -843,11 +981,32 @@ def main():
                 last_control_at = time.monotonic()
                 current_command = (linear, angular, reason)
 
+            now = time.monotonic()
+            if now - last_state_at >= 0.1:
+                last_state_at = now
+                hold = node.hold
+                node.publish_state(dict(
+                    mode=args.mode, policy=current_command[2],
+                    linear=round(current_command[0], 3), angular=round(current_command[1], 3),
+                    hold=None if hold is None else dict(
+                        id=hold['id'], reason=hold['reason'], text=HOLD_TEXT[hold['reason']],
+                        age_s=round(now - hold['since'], 1)),
+                    crosswalk_action=args.crosswalk_action,
+                    detections=sorted({item[0] for item in last_detections}),
+                    lane_error=None if lane_error is None else round(lane_error, 3),
+                    inference_ms=None if last_latency_ms is None else round(last_latency_ms, 1),
+                    camera_age_s=None if camera_age is None else round(camera_age, 2),
+                    recording=bool(video_writers)))
+
             if not args.headless and overlay is not None:
-                cv2.imshow('Pinky vision drive (q = stop)', overlay)
+                cv2.imshow('Pinky vision drive (q = quit, g = go, space = stop)', overlay)
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):
                     break
+                if key == ord('g') and node.hold is not None:
+                    _release(node, node.hold['id'], time.monotonic(), '영상 창 g')
+                elif key == ord(' '):
+                    _hold(node, 'operator', time.monotonic(), '영상 창 space')
                 if args.mode == 'observe' and key == ord('s') and last_frame is not None:
                     output_dir = Path(args.output_dir).expanduser()
                     output_dir.mkdir(parents=True, exist_ok=True)

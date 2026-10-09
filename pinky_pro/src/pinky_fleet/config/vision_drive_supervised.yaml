@@ -6,7 +6,7 @@ model: ~/vision_drive_observations/train_runs/lane_seg_v1/weights/best.pt
 mode: drive
 device: auto
 driveable_class: driveable_area
-crosswalk_action: stop-then-go
+crosswalk_action: wait-signal
 crosswalk_stop_seconds: 10.0
 max_linear: 0.08
 max_angular: 0.40
