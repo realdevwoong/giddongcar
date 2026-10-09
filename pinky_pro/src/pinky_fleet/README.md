@@ -113,12 +113,13 @@ export PYTHONPATH="$HOME/giddongcar/.venv/lib/python3.12/site-packages${PYTHONPA
 # 영상 + segmentation/객체 인식만 확인 (속도 명령 없음)
 ros2 run pinky_fleet vision_drive --robot-ip 192.168.0.6 --model /경로/학습모델.pt --mode observe
 
-# YAML preset으로 통제된 저속 lane-follow 실험
+# YAML preset으로 통제된 저속 lane-follow 실험. 로봇 옆에서 직접 감독할 때만 실행
 ros2 run pinky_fleet vision_drive --robot-ip 192.168.0.6 \
-  --preset ~/giddongcar/pinky_pro/src/pinky_fleet/config/vision_drive_supervised.yaml
+  --preset ~/giddongcar/pinky_pro/src/pinky_fleet/config/vision_drive_supervised.yaml \
+  --enable-motion --confirm-supervised-test --confirm-attended-test-without-watchdog
 ```
 
-`--preset`은 모델, 모드, 횡단보도 정책, 속도 상한, 조향값과 이 감독형 preset에 설정된 모션 허용 확인을 불러옵니다. 이 파일을 사용하면 실제 주행 명령이 활성화되므로 로봇 옆에서 직접 감독할 준비가 되었을 때만 실행하세요. 명령행에서 지정한 값은 preset보다 우선합니다. 로봇 IP는 YAML에 넣지 않고 매번 직접 지정합니다. 관찰만 할 때는 `--mode observe`를 명령행에 추가해 preset의 `drive` 값을 덮어쓰고, `--model /경로/모델.pt`로 다른 모델을 사용할 수 있습니다. 설치된 preset은 `$(ros2 pkg prefix pinky_fleet)/share/pinky_fleet/config/vision_drive_supervised.yaml`에도 복사됩니다.
+`--preset`은 모델, 모드, 횡단보도 정책, 속도 상한, 조향값을 불러옵니다. 명령행에서 지정한 값은 preset보다 우선합니다. 로봇 IP와 모션 허용·감독 확인 옵션(`--enable-motion`, `--confirm-supervised-test`, `--watchdog-verified`, `--confirm-attended-test-without-watchdog`)은 YAML에 넣을 수 없고 매번 명령행에서 직접 지정합니다. preset만 주면 주행 모드 확인에서 멈추고 로봇은 움직이지 않습니다. 관찰만 할 때는 `--mode observe`를 명령행에 추가해 preset의 `drive` 값을 덮어쓰고, `--model /경로/모델.pt`로 다른 모델을 사용할 수 있습니다. 설치된 preset은 `$(ros2 pkg prefix pinky_fleet)/share/pinky_fleet/config/vision_drive_supervised.yaml`에도 복사됩니다.
 
 주변에 IP가 같은 Pinky가 여럿 있으면(공유기가 달라도 `192.168.0.x`가 겹칠 수 있음) 엉뚱한 로봇의 카메라에 명령이 갈 수 있습니다. 이때는 `--ble-name pinky_6422`처럼 로봇의 BLE 이름을 지정합니다. `tape_lane_drive`도 같은 인자를 받습니다.
 

@@ -91,8 +91,12 @@ def parse_args(argv=None):
             parser.error(f'preset YAML을 읽을 수 없습니다 ({preset_path}): {exc}')
         if not isinstance(preset, dict):
             parser.error('preset은 key-value 형식의 YAML mapping이어야 합니다.')
+        # Motion permission and supervision confirmations must be typed by the
+        # operator each run; a preset file alone must never make the robot move.
         protected = {
             'robot_ip', 'preset',
+            'enable_motion', 'confirm_supervised_test',
+            'watchdog_verified', 'confirm_attended_test_without_watchdog',
         }
         actions = {action.dest: action for action in parser._actions}
         for key, value in preset.items():
