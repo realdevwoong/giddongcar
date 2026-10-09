@@ -770,7 +770,7 @@ function view(id) {
       waiting: 'AMCL이 켜지면 스스로 위치를 찾아요 (auto_spin이면 제자리에서 한 바퀴 돌아요)',
       searching: `라이다로 지도와 맞춰 보는 중 (가만히) · ${L.quiet[0]}/${L.quiet[1]}${err}`,
       spinning: `제자리에서 천천히 한 바퀴 · ${Math.round((L.turned || 0) * 100)}%${err} — 멈추려면 ■ 이동 취소`,
-      unsure: r.drive === false ? `확신이 없어요${err} — 달리다 보면 잡히기도 해요. 바로 보려면 ↗ 초기 위치를 찍으세요`
+      unsure: r.vision && r.vision.online ? `확신이 없어요${err} — vision_drive가 켜져 있어 돌지 않아요. 달리다 보면 잡히기도 해요. 바로 보려면 ↗ 초기 위치를 찍으세요`
         : `확신이 없어요${err} — 로봇 주변이 비었는지 보고 ⟳ 돌면서 찾기, 또는 ↗ 초기 위치를 직접 찍으세요`,
     }[L.phase];
     return {key: 'loc-' + L.phase, ...LOC[L.phase], detail, pos: ''};
@@ -1810,9 +1810,9 @@ function renderCard(id) {
     setAttr(el.go, 'aria-disabled', why ? 'true' : null);
     setAttr(el.go, 'title', why ? `지금은 못 보내요: ${why}` : `찍어 둔 목적지 (${xy(planned[id])}, ${deg(planned[id].yaw)}°)로 출발합니다`);
   }
-  // vision 모드(drive === false): 관제는 로봇을 돌리지 않는다. 초기 위치만 찍는다
+  // vision_drive가 돌고 있으면 그쪽이 로봇을 몬다: 관제는 돌리지 않고 초기 위치만 찍는다
   const locating = v.key === 'loc-searching' || v.key === 'loc-unsure';
-  const canSpin = locating && !(r && r.drive === false);
+  const canSpin = locating && !(r && r.vision && r.vision.online);
   show(el.spin, canSpin);
   if (canSpin) setAttr(el.spin, 'aria-disabled', pending[id] ? 'true' : null);
   show(el.setpose, v.key === 'nopose' || locating);

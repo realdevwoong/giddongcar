@@ -178,15 +178,38 @@ def test_dashboard_and_vision_drive_talk_over_ros():
         robot.close()
 
 
-def test_watching_dashboard_refuses_to_spin_and_never_auto_spins():
-    robot = SimpleNamespace(drive=False)
+def test_no_dashboard_spin_while_vision_drive_runs():
+    """vision_drive가 켜져 있으면 관제는 로봇을 돌리지 않는다(버튼·자동 위치 찾기 모두)."""
+    from pinky_fleet.localize import Localizer
+    robot = SimpleNamespace(vision_driving=lambda: True)
     with pytest.raises(CommandError) as error:
         Robot.start_spin(robot)
-    assert error.value.code == 'drive_disabled'
+    assert error.value.code == 'vision_active'
+    quiet = SimpleNamespace(localizer=Localizer(), auto_spin=True, odom_yaw=0.0, vision_driving=lambda: True)
+    quiet.localizer.amcl_ready(0.0)
+    Robot.on_global_started(quiet, None)
+    assert quiet.localizer.phase == 'searching'                    # 돌지 않고 가만히 찾는다
+
+
+def test_spin_hands_over_and_releases_cmd_vel():
+    """처음 위치 찾기 회전 중에 vision_drive가 켜지면 멈추고, 끝난 뒤 cmd_vel 발행자를 지운다."""
     with patch.dict(os.environ, ISOLATED):
-        real = Robot('probe', 81, auto_spin=True, drive=False)
+        robot = Robot('probe', 81, auto_spin=True)
     try:
-        assert real.auto_spin is False and real.snapshot()['drive'] is False
-        assert not real.get_publishers_info_by_topic('/cmd_vel')
+        with robot.lock:
+            robot.localizer.amcl_ready(0.0)
+            robot.localizer.spin_start(time.monotonic(), 0.0)
+        robot.spin_tick()
+        assert robot.cmd_vel is not None and robot.driving             # 회전 중: 관제가 cmd_vel을 쥔다
+        robot.vision_state, robot.vision_state_at = dict(mode='drive', hold=None), time.monotonic()
+        robot.spin_tick()                                              # vision_drive가 켜졌다 → 멈추고 0 속도
+        assert not robot.driving and robot.localizer.phase == 'unsure' and robot.release_at is not None
+        robot.release_at = time.monotonic() - 0.1                      # 2초가 지났다고 치고
+        robot.spin_tick()
+        assert robot.cmd_vel is None                                   # 발행자를 지워 vision_drive가 몰 수 있다
+        deadline = time.monotonic() + 3.0
+        while robot.get_publishers_info_by_topic('/cmd_vel') and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not robot.get_publishers_info_by_topic('/cmd_vel')
     finally:
-        real.close()
+        robot.close()

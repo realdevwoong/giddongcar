@@ -49,7 +49,8 @@ def start(context):
         raise RuntimeError('auto_spin은 true 또는 false여야 합니다')
     auto_spin = auto_spin == 'true'
     # vision:=true — vision_drive가 로봇을 몬다. Nav2(cmd_vel을 내는 controller·behavior)는 띄우지 않고
-    # 지도와 위치(map_server + AMCL)만 띄운다. 관제도 cmd_vel을 만들지 않는다(돌면서 찾기·auto_spin 없음).
+    # 지도와 위치(map_server + AMCL)만 띄운다. 처음 위치 찾기 회전(auto_spin)은 vision_drive를 켜기 전에만 하고,
+    # 끝나면 관제가 cmd_vel 발행자를 지워 vision_drive가 몰 수 있다.
     vision = LaunchConfiguration('vision', default='false').perform(context).lower()
     if vision not in ('true', 'false'):
         raise RuntimeError('vision은 true 또는 false여야 합니다')
@@ -109,7 +110,7 @@ def start(context):
             + (['--use-sim-time'] if sim else [])
             # 위치를 알려 준 로봇은 전역 위치 찾기를 하지 않는다. 나머지는 대시보드가 켜지자마자 스스로 찾는다
             + [arg for i, pose in enumerate(poses, 1) if pose for arg in ('--known-pose', f'robot{i}')]
-            + (['--no-drive'] if vision else (['--auto-spin'] if auto_spin else []))
+            + (['--auto-spin'] if auto_spin else [])
             + (['--traffic-zones', value('traffic_zones')] if value('traffic_zones') and not vision else []),
         output='screen'))
     handlers = [RegisterEventHandler(OnProcessExit(
@@ -151,7 +152,7 @@ def generate_launch_description():
                               description='교통 정리 구역 YAML(좁은 문에 한 대씩). 비우면(traffic_zones:=) 끈다. '
                                           '지도가 구역 파일과 다르면 대시보드가 스스로 끈다'),
         DeclareLaunchArgument('vision', default_value='false',
-                              description='true: vision_drive가 로봇을 몬다. Nav2 대신 지도·위치(map_server + AMCL)만 띄우고 '
-                                          '관제는 cmd_vel을 내지 않는다(돌면서 찾기 없음). 위치는 ↗ 초기 위치나 robot1_initial_pose로'),
+                              description='true: vision_drive가 로봇을 몬다. Nav2 대신 지도·위치(map_server + AMCL)만 띄운다. '
+                                          'auto_spin 위치 찾기 회전은 vision_drive를 켜기 전에 끝내고, 그 뒤 관제는 cmd_vel을 내지 않는다'),
         OpaqueFunction(function=start),
     ])

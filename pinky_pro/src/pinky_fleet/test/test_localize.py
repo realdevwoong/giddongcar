@@ -104,7 +104,8 @@ class DashboardSpinTests(unittest.TestCase):
 
     def robot(self):
         robot = SimpleNamespace(lock=threading.RLock(), localizer=Localizer(), odom_yaw=0.0, driving=False,
-                                cmd_vel=Mock(), command_lock=threading.Lock(), backup_handle=None)
+                                cmd_vel=Mock(), command_lock=threading.Lock(), backup_handle=None,
+                                release_at=None, destroy_publisher=Mock(), vision_driving=lambda: False)
         robot.send_zero = lambda: Robot.send_zero(robot)
         robot.velocity = lambda: Robot.velocity(robot)
         robot.stop_spin = lambda: Robot.stop_spin(robot)
@@ -151,7 +152,7 @@ class DashboardSpinTests(unittest.TestCase):
     def test_spin_refused_while_navigating_or_offline(self):
         for online, active, code in ((False, False, 'offline'), (True, True, 'nav_active')):
             with self.subTest(code):
-                robot = SimpleNamespace(lock=threading.RLock(), localizer=Localizer(), drive=True,
+                robot = SimpleNamespace(lock=threading.RLock(), localizer=Localizer(), vision_driving=lambda: False,
                                         snapshot=lambda: dict(online=online, nav=dict(active=active)))
                 with self.assertRaises(CommandError) as caught:
                     Robot.start_spin(robot)
@@ -160,7 +161,8 @@ class DashboardSpinTests(unittest.TestCase):
     def test_auto_spin_starts_turning_as_soon_as_search_starts(self):
         for auto, phase in ((True, 'spinning'), (False, 'searching')):
             with self.subTest(auto=auto):
-                robot = SimpleNamespace(localizer=Localizer(), auto_spin=auto, odom_yaw=0.0)
+                robot = SimpleNamespace(localizer=Localizer(), auto_spin=auto, odom_yaw=0.0,
+                                        vision_driving=lambda: False)
                 Robot.on_global_started(robot, None)
                 self.assertEqual(robot.localizer.phase, phase)
 

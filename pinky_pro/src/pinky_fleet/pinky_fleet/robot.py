@@ -47,7 +47,7 @@ def finite_json(value):
 
 
 class Robot(Node):
-    def __init__(self, name, domain, use_sim_time=False, known_pose=False, auto_spin=False, drive=True):
+    def __init__(self, name, domain, use_sim_time=False, known_pose=False, auto_spin=False):
         self.ros_context = Context()
         rclpy.init(context=self.ros_context, domain_id=domain)
         # 시뮬 시간이면 now()가 /clock을 따라가서 Gazebo TF 스탬프가 2초 신선도 검사를 통과한다.
@@ -71,9 +71,8 @@ class Robot(Node):
         self.lamp_future = None   # 아직 답을 기다리는 램프 요청
         # 전역 위치 찾기. launch가 초기 위치를 알려 준 로봇(시뮬)은 끈다
         self.localizer = Localizer(known=known_pose)
-        # drive=False: vision_drive가 로봇을 모는 중. 관제는 cmd_vel을 만들지 않고 돌지도 않는다(위치만 본다)
-        self.drive = drive
-        self.auto_spin = auto_spin and drive   # 전역 찾기를 시작하자마자 제자리에서 한 바퀴 돈다(사람 확인 없이)
+        self.auto_spin = auto_spin   # 전역 찾기를 시작하자마자 제자리에서 한 바퀴 돈다(사람 확인 없이)
+        self.release_at = None       # 회전이 끝난 뒤 cmd_vel 발행자를 지울 시각(vision_drive가 다시 몰 수 있게)
         self.odom_yaw = None
         self.amcl_active = False  # AMCL lifecycle이 active인 걸 봤다
         self.loc_future, self.loc_sent = None, 0.0   # 아직 답을 기다리는 AMCL 요청 (future, client), 보낸 시각
@@ -335,7 +334,8 @@ class Robot(Node):
 
     def on_global_started(self, _):
         # 잠금 안에서 불린다(call_amcl). 회전 속도는 spin_tick이 0.1초 안에 보내기 시작한다
-        if self.auto_spin:
+        # vision_drive가 켜져 있으면 그쪽이 로봇을 몬다: 돌지 않고 가만히 찾는다
+        if self.auto_spin and not self.vision_driving():
             self.localizer.spin_start(time.monotonic(), self.odom_yaw)
         else:
             self.localizer.started()
@@ -347,13 +347,23 @@ class Robot(Node):
         """0.1초마다: 돌면서 찾는 중이면 회전 속도를, 방금 끝났으면 0 속도를 보낸다.
         pinky_bringup은 cmd_vel이 끊겨도 마지막 속도로 계속 달리므로 끝날 때 반드시 0을 보낸다."""
         with self.lock:
-            turning = self.localizer.spin_update(time.monotonic(), self.odom_yaw)
+            now = time.monotonic()
+            turning = self.localizer.spin_update(now, self.odom_yaw)
+            if turning and self.vision_driving():
+                self.localizer.spin_abort()   # vision_drive가 켜졌다: 로봇을 넘겨준다
+                turning = False
             was, self.driving = self.driving, turning
             # 잠금 안에서 보낸다: stop_spin이 0을 보낸 뒤에 회전 속도가 끼어들지 않게
             if turning:
                 self.velocity().publish(Twist(angular=Vector3(z=SPIN_SPEED)))
+                self.release_at = None
             elif was:
                 self.send_zero()
+            elif self.cmd_vel is not None and self.release_at is not None and now >= self.release_at:
+                # 0 속도가 닿을 시간을 두고 발행자를 지운다. vision_drive는 다른 cmd_vel 발행자가 있으면 주행을 거부한다
+                self.cmd_vel.publish(Twist())
+                self.destroy_publisher(self.cmd_vel)
+                self.cmd_vel, self.release_at = None, None
 
     def stop_spin(self):
         """사람이 멈추거나 초기 위치를 찍거나 관제를 끌 때. 돌던 중이었으면 True."""
@@ -375,6 +385,12 @@ class Robot(Node):
             return           # 이 대시보드는 속도를 보낸 적이 없다
         for _ in range(3):   # Wi-Fi에서 하나가 늦어도 멈추게
             self.cmd_vel.publish(Twist())
+        self.release_at = time.monotonic() + 2.0
+
+    def vision_driving(self):
+        """vision_drive가 같은 도메인에서 돌고 있다(상태가 2초 안에 왔다). 그동안 관제는 로봇을 돌리지 않는다."""
+        view = self.vision_view()
+        return bool(view and view['online'])
 
     def update_pose(self):
         """map → base_link 위치. 신선도는 로봇이 찍은 시각이 아니라 이 PC가 '새 값을 받은 시각'으로 본다.
@@ -419,8 +435,7 @@ class Robot(Node):
                         localize=self.localizer.snapshot(),
                         path=self.path if online else [], status=label, nav=nav, lamp=self.lamp,
                         clock_skew=round(getattr(self, 'clock_skew', 0.0), 2) if online else None,
-                        nav_ready=self.navigator.server_is_ready(), vision=self.vision_view(),
-                        drive=getattr(self, 'drive', True))
+                        nav_ready=self.navigator.server_is_ready(), vision=self.vision_view())
 
     def command(self, action, body):
         # Serialize HTTP requests per robot; the ROS executor remains independent.
@@ -499,9 +514,9 @@ class Robot(Node):
 
     def start_spin(self):
         """전역 찾기를 새로 뿌리고 제자리에서 한 바퀴 돈다. 사람이 로봇 주변을 보고 누르는 버튼에서만 부른다."""
-        if not self.drive:
-            raise CommandError('vision_drive가 모는 중이라 관제는 로봇을 돌리지 않아요. ↗ 초기 위치로 잡으세요.',
-                               'drive_disabled')
+        if self.vision_driving():
+            raise CommandError('vision_drive가 켜져 있어 관제는 로봇을 돌리지 않아요. ↗ 초기 위치로 잡거나, '
+                               'vision_drive를 끄고 돌리세요.', 'vision_active')
         state = self.snapshot()
         if not state['online']:
             raise CommandError('로봇 연결이 끊겨 있어요.', 'offline')

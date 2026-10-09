@@ -49,8 +49,6 @@ def main():
     parser.add_argument('--map', default=None,
                         help='map_server가 /map을 보내기 전(또는 Nav2 없이 대시보드만 띄울 때) 보여 줄 지도 YAML. '
                              '기본은 이 패키지의 maps/good3.yaml, 빈 값이면 안 씀')
-    parser.add_argument('--no-drive', action='store_true',
-                        help='vision_drive가 로봇을 몬다: 관제는 cmd_vel을 만들지 않고 제자리 회전도 하지 않는다')
     parser.add_argument('--auto-spin', action='store_true',
                         help='전역 위치 찾기를 시작하자마자 제자리에서 한 바퀴 돈다(실물이 사람 확인 없이 움직인다)')
     args = parser.parse_args()
@@ -74,8 +72,7 @@ def main():
     try:
         for i, domain in enumerate((args.robot1_domain, args.robot2_domain), 1):
             name = f'robot{i}'
-            robots[name] = Robot(name, domain, args.use_sim_time, name in args.known_pose, args.auto_spin,
-                                 drive=not args.no_drive)
+            robots[name] = Robot(name, domain, args.use_sim_time, name in args.known_pose, args.auto_spin)
             cameras[name] = MJPEGCamera(getattr(args, f'{name}_camera_host'), args.camera_port, name)
             cameras[name].start()
             camera_controls[name] = PinkyCameraControl(getattr(args, f'{name}_camera_host'), name, cameras[name])
