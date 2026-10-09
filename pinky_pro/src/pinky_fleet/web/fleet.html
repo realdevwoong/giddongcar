@@ -387,7 +387,8 @@ dialog dt { font-weight: 700; }
     <li>실선 = robot1 경로, 점선 = robot2 경로</li>
     <li>채운 깃발 = 진행 중인 목적지(아래 눈금 = 도착 방향), 빈 빨강 깃발과 ✕ = 실패한 목적지</li>
     <li>빨간 고리와 ! = 이동 실패 · 점선 빈 원 = 연결이 끊긴 로봇의 마지막 위치</li>
-    <li>밝은 칸 = 바닥, 어두운 칸 = 벽, 청회색 = 미탐색 · 옅은 격자 = 0.5 m</li>
+    <li>흰 선 = 벽(라이다로 만든 지도), 검정 = 바닥·미탐색 · 옅은 격자 = 0.5 m</li>
+    <li>Nav2 없이 관제만 띄우면 지도 YAML을 직접 읽어 보여 줘요. 이때는 로봇 위치를 추정하지 않아요</li>
   </ul>
   <h3>용어</h3>
   <dl>
@@ -497,7 +498,9 @@ const OFFLINE_POLLS = 3;                            // 로봇 끊김 알림은 3
 const LOG_MAX = 50;
 const MARKER_R = 11, MARKER_R_SEL = 13, WEDGE = 10, HIT_R = 18;
 const CLICK_PX = 8;                                 // 이보다(화면 px) 덜 끌면 클릭(현재 방향 유지)
-const FLOOR = [230, 235, 241], WALL = [21, 27, 36], UNKNOWN = [44, 55, 71], UNKNOWN_FAR = [30, 40, 54];
+// 지도: 벽(점유 칸) = 흰 선, 바닥·미탐색 = 검정 (코스의 흰 테이프처럼 선만 보이게)
+const FLOOR = [0, 0, 0], WALL = [255, 255, 255], UNKNOWN = [0, 0, 0], UNKNOWN_FAR = [0, 0, 0];
+const MAP_INK = '#e7edf6';   // 검은 지도 위에 바로 그리는 깃대·발·연결선
 const DARK = '#0e141d', RED = '#d92d43', TAU = Math.PI * 2;
 const FONT = "system-ui, 'Noto Sans KR', 'Noto Sans CJK KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif";
 const CLOCK_SKEW_S = 0.5;   // 로봇 시계 차이가 이보다 크면 경고(초)
@@ -542,6 +545,7 @@ const WHY = {server: '서버 연결 끊김', map: '지도 수신 대기', mismat
 let robots = [];                                    // 마지막 /api/state 의 robots
 let traffic = null;                                 // 교통 정리·재시도 상태
 let map = null, mapId = null, bitmap = null, known = null;   // known: 알려진 칸 범위(칸 단위)
+let mapSource = null;   // 'robot' = map_server의 /map, 'file' = 관제가 지도 YAML을 직접 읽음
 const mapLoad = {busy: false, fails: 0, retryAt: 0, error: ''};   // /api/map 받기 (연결 상태와 따로)
 let scale = 1, ox = 0, oy = 0, cssW = 0, cssH = 0, dpr = 1;  // 지도 → 화면(CSS px)
 let selected = 'robot1';
@@ -752,6 +756,8 @@ function view(id) {
       glyph: WARN, tone: 'red', short: '끊김', detail: 'odom 2초 넘게 없음 — 전원·Wi-Fi·bringup 확인 (시뮬이면 일시정지인지 확인)',
       pos: [lastSeen, lastGoal].filter(Boolean).join(' · ')};
   }
+  if (!r.map_id && mapSource === 'file') return {key: 'filemap', ko: '위치 없음', en: 'MAP FILE ONLY', glyph: '○', tone: 'dash',
+    short: '위치 없음', detail: '지도 파일만 보여 줘요 — Nav2(AMCL)가 없어 로봇 위치는 추정하지 않아요', pos: ''};
   if (!r.map_id) return {key: 'nomap', ko: '지도 없음', en: 'NO MAP', glyph: '≠', tone: 'amber-o', short: '지도 없음',
     detail: '이 로봇의 /map을 아직 못 받았어요 — map_server 확인', pos: ''};
   if (!r.map_matches) return {key: 'mismatch', ko: '지도 불일치', en: 'MAP MISMATCH', glyph: '≠', tone: 'amber-o', short: '불일치',
@@ -886,7 +892,7 @@ function installMap(data) {
   known = count >= map.width * map.height * .05 ? {x0, x1: x1 + 1, y0, y1: y1 + 1} : null;
   for (let y = 0; y < map.height; y++) for (let x = 0; x < map.width; x++) {
     const v = map.data[y * map.width + x], i = ((map.height - 1 - y) * map.width + x) * 4;
-    // RViz처럼 밝은 바닥·어두운 벽, 미탐색은 뒤로 물러나는 청회색 (알려진 범위 밖은 더 어둡게)
+    // 점유 정도에 따라 검정(바닥) → 흰색(벽). 미탐색도 검정
     const far = known && (x < known.x0 || x >= known.x1 || y < known.y0 || y >= known.y1);
     const c = v < 0 ? (far ? UNKNOWN_FAR : UNKNOWN) : FLOOR.map((f, k) => Math.round(f + (WALL[k] - f) * Math.min(v, 100) / 100));
     image.data[i] = c[0]; image.data[i + 1] = c[1]; image.data[i + 2] = c[2]; image.data[i + 3] = 255;
@@ -976,7 +982,7 @@ function drawGrid() {   // 0.5 m 격자: 0.35 m 문 폭을 눈으로 가늠할 �
   const [minX, maxX, minY, maxY] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
   ctx.save();
   ctx.beginPath(); ctx.rect(ox, oy, map.width * scale, map.height * scale); ctx.clip();
-  ctx.strokeStyle = 'rgba(0, 0, 0, .07)'; ctx.lineWidth = 1; ctx.beginPath();
+  ctx.strokeStyle = 'rgba(255, 255, 255, .09)'; ctx.lineWidth = 1; ctx.beginPath();
   for (let k = Math.ceil(minX / .5); k * .5 <= maxX; k++) {
     const a = worldToScreen({x: k * .5, y: minY}), b = worldToScreen({x: k * .5, y: maxY});
     ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
@@ -1016,7 +1022,7 @@ function drawFlag(id, t, mode) {
     ctx.beginPath(); ctx.moveTo(q.x, q.y); ctx.lineTo(ex, ey); ctx.strokeStyle = DARK; ctx.lineWidth = 4; ctx.stroke();
     ctx.strokeStyle = failed ? RED : COLOR[id]; ctx.lineWidth = 2; ctx.stroke();
   }
-  ctx.beginPath(); ctx.moveTo(q.x, q.y); ctx.lineTo(q.x, q.y - 24); ctx.strokeStyle = DARK; ctx.lineWidth = 2; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(q.x, q.y); ctx.lineTo(q.x, q.y - 24); ctx.strokeStyle = MAP_INK; ctx.lineWidth = 2; ctx.stroke();
   ctx.beginPath(); ctx.rect(q.x + 1, q.y - 24, 16, 12);
   if (failed) {
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 4; ctx.stroke(); ctx.strokeStyle = RED; ctx.lineWidth = 2; ctx.stroke();
@@ -1032,7 +1038,7 @@ function drawFlag(id, t, mode) {
     ctx.beginPath(); ctx.moveTo(q.x - 5, q.y - 5); ctx.lineTo(q.x + 5, q.y + 5); ctx.moveTo(q.x + 5, q.y - 5); ctx.lineTo(q.x - 5, q.y + 5);
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 4.5; ctx.stroke(); ctx.strokeStyle = RED; ctx.lineWidth = 2.5; ctx.stroke();
   } else {
-    ctx.beginPath(); ctx.arc(q.x, q.y, 3, 0, TAU); ctx.fillStyle = DARK; ctx.fill();
+    ctx.beginPath(); ctx.arc(q.x, q.y, 3, 0, TAU); ctx.fillStyle = MAP_INK; ctx.fill();
   }
   ctx.restore();
 }
@@ -1117,7 +1123,7 @@ function placeLabel(box, w, h, order, ownId) {
 }
 function leader(q, rect) {   // 기본 자리가 아니면 대상과 라벨을 잇는 가는 선
   const lx = Math.max(rect.x, Math.min(q.x, rect.x + rect.w)), ly = Math.max(rect.y, Math.min(q.y, rect.y + rect.h));
-  ctx.beginPath(); ctx.moveTo(q.x, q.y); ctx.lineTo(lx, ly); ctx.strokeStyle = DARK; ctx.lineWidth = 1; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(q.x, q.y); ctx.lineTo(lx, ly); ctx.strokeStyle = MAP_INK; ctx.lineWidth = 1; ctx.stroke();
 }
 const circleBox = (q, rad) => ({x: q.x - rad, y: q.y - rad, w: 2 * rad, h: 2 * rad});
 const flagBox = q => ({x: q.x - 7, y: q.y - 26, w: 26, h: 33});
@@ -2009,6 +2015,7 @@ async function poll() {
     conn.everOk = true; conn.failing = false; conn.lastOk = Date.now();
     robots = data.robots;
     traffic = data.traffic || null;
+    mapSource = data.map_source || null;
     guard(updateTracks);
     if (data.map_id && data.map_id !== mapId) loadMap();   // 기다리지 않는다: 지도가 오는 동안에도 상태는 계속 받는다
   }

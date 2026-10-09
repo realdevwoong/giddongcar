@@ -31,6 +31,7 @@ from pinky_fleet.perception import YOLOPerception
 from pinky_fleet.robot import Robot
 from pinky_fleet.traffic import load_zones
 from pinky_fleet.dashboard_http import handler_for
+from pinky_fleet.map_file import load_map
 
 def main():
     parser = argparse.ArgumentParser()
@@ -45,10 +46,22 @@ def main():
     parser.add_argument('--traffic-zones', default='', help='교통 정리 구역 YAML. 비우면 교통 정리를 끈다')
     parser.add_argument('--known-pose', action='append', default=[], choices=('robot1', 'robot2'),
                         help='launch가 초기 위치를 알려 준 로봇. 이 로봇은 전역 위치 찾기를 하지 않는다')
+    parser.add_argument('--map', default=None,
+                        help='map_server가 /map을 보내기 전(또는 Nav2 없이 대시보드만 띄울 때) 보여 줄 지도 YAML. '
+                             '기본은 이 패키지의 maps/good3.yaml, 빈 값이면 안 씀')
     parser.add_argument('--auto-spin', action='store_true',
                         help='전역 위치 찾기를 시작하자마자 제자리에서 한 바퀴 돈다(실물이 사람 확인 없이 움직인다)')
     args = parser.parse_args()
     zones = load_zones(args.traffic_zones) if args.traffic_zones else None
+    map_path = (Path(get_package_share_directory('pinky_fleet')) / 'maps' / 'good3.yaml'
+                if args.map is None else args.map)
+    file_map = None
+    if map_path:
+        try:
+            file_map = load_map(map_path)
+            print(f'지도 파일: {map_path}', flush=True)
+        except (OSError, KeyError, ValueError) as exc:
+            print(f'지도 파일을 읽지 못함({map_path}): {exc} — map_server의 /map만 기다립니다', flush=True)
     # nohup이나 스크립트 백그라운드로 띄우면 SIGINT 무시가 상속돼 Ctrl+C로 안 꺼진다. 항상 KeyboardInterrupt를 받게 한다.
     signal.signal(signal.SIGINT, signal.default_int_handler)
     robots = {}
@@ -63,7 +76,7 @@ def main():
             cameras[name] = MJPEGCamera(getattr(args, f'{name}_camera_host'), args.camera_port, name)
             cameras[name].start()
             camera_controls[name] = PinkyCameraControl(getattr(args, f'{name}_camera_host'), name, cameras[name])
-        fleet = Fleet(robots, zones, cameras, camera_controls)
+        fleet = Fleet(robots, zones, cameras, camera_controls, file_map)
         model_path = Path(get_package_share_directory('pinky_fleet')) / 'models' / 'yolo11n.pt'
         perception = YOLOPerception(cameras, str(model_path))
         perception.start()

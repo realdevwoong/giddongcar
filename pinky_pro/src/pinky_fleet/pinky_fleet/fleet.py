@@ -10,8 +10,11 @@ from pinky_fleet.fleet_common import (
 )
 
 class Fleet:
-    def __init__(self, robots, zones=None, cameras=None, camera_controls=None):
+    def __init__(self, robots, zones=None, cameras=None, camera_controls=None, file_map=None):
         self.robots = robots
+        # (map_id, map) read from the map YAML. Shown until a robot's map_server sends /map
+        # (only the dashboard runs while vision_drive drives).
+        self.file_map = file_map
         self.cameras = cameras or {}
         self.camera_controls = camera_controls or {}
         self.camera_lock = threading.Lock()
@@ -37,7 +40,15 @@ class Fleet:
             with robot.lock:
                 if robot.map_data is not None:
                     return robot.map_id, robot.map_data
-        return None, None
+        return self.file_map or (None, None)
+
+    def map_source(self):
+        """'robot' (/map from map_server), 'file' (map YAML read by the dashboard) or None."""
+        for robot in self.robots.values():
+            with robot.lock:
+                if robot.map_data is not None:
+                    return 'robot'
+        return 'file' if self.file_map else None
 
     def state(self):
         map_id, _ = self.map()
@@ -58,7 +69,7 @@ class Fleet:
                     state['status'] = '양보 대기'
         for state in states:
             state['map_matches'] = bool(map_id and state['map_id'] == map_id)
-        return dict(map_id=map_id, robots=states, traffic=self.traffic_state())
+        return dict(map_id=map_id, map_source=self.map_source(), robots=states, traffic=self.traffic_state())
 
     def traffic_state(self):
         if not self.gate:

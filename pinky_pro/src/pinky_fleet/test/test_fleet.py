@@ -805,7 +805,8 @@ class LaunchTests(unittest.TestCase):
                                    '--robot1-domain', '15', '--robot2-domain', '17',
                                    '--robot1-camera-host', '', '--robot2-camera-host', '',
                                    '--camera-port', '5000',
-                                   '--host', '127.0.0.1', '--port', '8080'])
+                                   '--host', '127.0.0.1', '--port', '8080',
+                                   '--map', str((LAUNCH_FILE.parents[1] / 'maps' / 'good3.yaml').resolve())])
 
     def test_generated_params_wait_for_initial_pose(self):
         cmds, _ = self.start('false', REAL, env={})

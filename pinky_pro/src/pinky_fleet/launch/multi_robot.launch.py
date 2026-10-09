@@ -97,7 +97,7 @@ def start(context):
              '--robot1-camera-host', LaunchConfiguration('robot1_camera_host', default='').perform(context),
              '--robot2-camera-host', LaunchConfiguration('robot2_camera_host', default='').perform(context),
              '--camera-port', LaunchConfiguration('camera_port', default='5000').perform(context),
-             '--host', value('host'), '--port', value('port')]
+             '--host', value('host'), '--port', value('port'), '--map', str(map_path)]
             + (['--use-sim-time'] if sim else [])
             # 위치를 알려 준 로봇은 전역 위치 찾기를 하지 않는다. 나머지는 대시보드가 켜지자마자 스스로 찾는다
             + [arg for i, pose in enumerate(poses, 1) if pose for arg in ('--known-pose', f'robot{i}')]
