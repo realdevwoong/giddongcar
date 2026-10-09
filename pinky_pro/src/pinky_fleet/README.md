@@ -118,6 +118,8 @@ ros2 run pinky_fleet vision_drive --robot-ip 192.168.0.6 --model /경로/학습�
   --mode drive --enable-motion --confirm-supervised-test --watchdog-verified
 ```
 
+주변에 IP가 같은 Pinky가 여럿 있으면(공유기가 달라도 `192.168.0.x`가 겹칠 수 있음) 엉뚱한 로봇의 카메라에 명령이 갈 수 있습니다. 이때는 `--ble-name pinky_6422`처럼 로봇의 BLE 이름을 지정합니다. `tape_lane_drive`도 같은 인자를 받습니다.
+
 `vision_drive`는 로컬 모델 추론을 위해 Ultralytics의 외부 DNS 연결 확인을 오프라인 모드로 실행합니다. 모델 파일과 Python 의존성이 이미 설치되어 있으면 인터넷 없이도 시작할 수 있습니다. 카메라 제어는 로봇과 BLE, 영상 수신은 같은 로컬 네트워크 연결이 필요합니다.
 
 흰 테이프 차선 검출과 저속 라인 추종 실험은 별도 `pinky_driving` 패키지의 `tape_lane_drive`를 사용합니다. 실행법과 안전 조건은 [pinky_driving README](../pinky_driving/README.md)를 참고하세요.
