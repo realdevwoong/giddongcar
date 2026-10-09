@@ -158,6 +158,10 @@ button.cchip[aria-pressed="true"] { border-color: var(--rc); box-shadow: inset 0
   padding: 5px 8px; flex-wrap: wrap; border-top: 1px solid var(--line); background: var(--card); }
 .cam-control-status { flex: 1 1 auto; min-width: 10em; color: var(--muted); font-size: 12px; }
 .cam-observe[aria-pressed="true"] { border-color: #f2b441; color: #f2b441; }
+/* vision_drive 화면: 출발 신호를 기다리면 주황 테두리 + 글 띠 (색만으로 알리지 않는다) */
+.vis.held { border-color: var(--amber); box-shadow: 0 0 0 2px rgba(242, 180, 65, .45); }
+.vis-hold { display: block; padding: 5px 8px; background: #3a2c10; color: var(--amber); font-weight: 700; font-size: 14px; }
+.vis .btn:disabled { opacity: .45; cursor: not-allowed; }
 .c-head { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; min-width: 0; min-height: 28px; }
 .c-name { display: inline-flex; align-items: center; gap: 7px; flex: 0 1 auto; min-width: 0; margin-left: -4px; padding: 0 4px;
   border: 0; border-radius: 6px; background: none; font-size: 16px; font-weight: 700; white-space: nowrap; overflow: hidden; }
@@ -399,6 +403,9 @@ dialog dt { font-weight: 700; }
       실패 빨강 빠른 깜빡임). ✓ = 램프 노드가 받았어요. 실제 불빛은 로봇에서 확인해요.
       <br><b>✕ 램프 응답 없음</b> = 램프 노드(set_lamp)가 없거나, 3초 안에 답이 없거나, 거부했어요. 대시보드가 알아서 다시 보내요. pinky_bringup은 램프 노드를 켜 주지 않으니 로봇에서 따로 실행하세요
       (시뮬은 sim.launch.py가 켜요). 대시보드가 2초마다 다시 보내요.</dd>
+    <dt>vision_drive</dt><dd>카메라 차선 주행(vision_drive)이 같은 ROS 도메인에서 돌면 카드에 그 영상 창 화면이 떠요.
+      시작할 때와 횡단보도에서는 멈춘 채 <b>▶ 출발</b>을 기다려요(주황 띠). <b>■ 정지</b>는 ▶ 출발 전까지 세워요.
+      비상 정지가 아니에요. 이 화면은 Nav2 없이 띄운 관제(fleet_dashboard만)에서 쓰세요. Nav2가 돌면 vision_drive가 주행을 거부해요.</dd>
     <dt>알림 끄기</dt><dd>머리줄·카드의 알림만 숨겨요. 로봇에는 아무것도 보내지 않아요.</dd>
     <dt>방향</dt><dd>0° = +x(오른쪽), 반시계 방향이 +.</dd>
   </dl>
@@ -448,6 +455,19 @@ dialog dt { font-weight: 700; }
         title="대시보드가 목표 상태에 맞춰 로봇 램프에 보낸 명령이에요. ✓ = 램프 노드가 받음. 실제 불빛은 로봇에서 확인해요.">
         <i class="sw" data-el="lampSw" aria-hidden="true"></i><span class="lamp-t" data-el="lampText"></span><span data-el="lampMark"></span>
         <button type="button" class="lamp-fail" data-el="lampFail" hidden aria-label="램프 응답 없음 — 도움말 열기">✕ 램프 응답 없음</button></span>
+    </div>
+    <!-- vision_drive 화면: 같은 ROS 도메인에서 vision_drive가 돌 때만 보인다 -->
+    <div class="cam vis" data-el="vis" hidden>
+      <img data-el="visImage" alt="vision_drive 차선 인식 화면" />
+      <span class="vis-hold" data-el="visHold" role="status" hidden></span>
+      <span class="cam-status" data-el="visStatus" role="status"></span>
+      <div class="cam-control">
+        <span class="cam-control-status" data-el="visNote"></span>
+        <button type="button" class="btn sm fill" data-el="visGo"
+          title="화면에 보이는 대기(시작·횡단보도·정지)를 풀어요. 화면에서 본 대기 번호를 같이 보내요">▶ 출발</button>
+        <button type="button" class="btn sm cancel" data-el="visStop"
+          title="vision_drive를 세워요. ▶ 출발을 누를 때까지 멈춰 있어요. 비상 정지가 아니에요">■ 정지</button>
+      </div>
     </div>
     <!-- 자리: 카메라 미리보기(카메라 프레임) — 주소는 API에서 받는다. 그 전에는 아무것도 그리지 않는다 -->
     <div class="cam" data-el="cam" hidden>
@@ -538,6 +558,9 @@ const cameraPending = {robot1: false, robot2: false};
 const cameraObservation = {robot1: {active: false, sequence: 0, signature: null}, robot2: {active: false, sequence: 0, signature: null}};
 const cameraImages = {}, cameraImageTimers = {}, cameraImageBusy = {robot1: false, robot2: false};
 const cameraDisplay = {robot1: '', robot2: ''};
+const visionPending = {robot1: false, robot2: false};
+const visionTimers = {}, visionBusy = {robot1: false, robot2: false};
+const visionSeenHold = {robot1: null, robot2: null};   // 기록에 남긴 마지막 대기 번호
 const sentPose = {robot1: null, robot2: null};      // 방금 보낸 초기 위치 고리 {pose, until}
 const planned = {robot1: null, robot2: null};       // 찍어 두고 아직 출발하지 않은 목적지 {x, y, yaw}
 // inflightSince: 지금 진행 중인 /api/state 요청을 시작한 시각 (없으면 0). 끊김은 '실제 요청이 늦거나 실패할 때'만 판단한다
@@ -581,6 +604,44 @@ async function refreshCameraImage(id) {
     cameraDisplay[id] = `대시보드 영상 요청 실패: ${String(error).slice(0, 80)}`;
   } finally {
     cameraImageBusy[id] = false;
+  }
+}
+// vision_drive 화면: 대시보드가 ROS로 받은 최신 JPEG를 150 ms마다 가져온다
+async function refreshVisionImage(id) {
+  const image = ui[id] && ui[id].visImage, current = robot(id);
+  const vis = current && current.vision;
+  if (!image || visionBusy[id] || !vis || !vis.image) return;
+  visionBusy[id] = true;
+  try {
+    const response = await fetch(`${vis.image}?t=${Date.now()}`, {cache: 'no-store'});
+    if (!response.ok) return;
+    const blob = await response.blob();
+    if (!blob.type.includes('image/jpeg') || !blob.size) return;
+    const url = URL.createObjectURL(blob), previous = image.dataset.objectUrl;
+    image.src = url;
+    image.dataset.objectUrl = url;
+    if (previous) URL.revokeObjectURL(previous);
+  } catch (error) {
+    // 다음 주기에 다시 가져온다. 끊김은 상태 줄(vision.online)이 알린다
+  } finally {
+    visionBusy[id] = false;
+  }
+}
+async function visionControl(id, action) {
+  if (visionPending[id]) return;
+  const current = robot(id), hold = current && current.vision && current.vision.hold;
+  const body = action === 'vision_go' ? {hold: hold ? hold.id : null} : {};
+  visionPending[id] = true;
+  render();
+  try {
+    const res = await request(`/api/robots/${id}/${action}`,
+      {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    log(id, action === 'vision_go' ? PLAY : '■', res.message, 'ok');
+  } catch (err) {
+    log(id, '✕', `${action === 'vision_go' ? '출발' : '정지'} 신호 실패: ${err.message}`, 'crit');
+  } finally {
+    visionPending[id] = false;
+    render();
   }
 }
 const xy = p => `${p.x.toFixed(2)}, ${p.y.toFixed(2)}`;
@@ -643,6 +704,8 @@ for (const id of IDS) {
   el.toolPose.onclick = () => arm(id, 'initialpose');
   el.toolGoal.onclick = () => arm(id, 'goal');
   el.cancel.onclick = () => { planned[id] = null; send(id, 'stop'); };
+  el.visGo.onclick = () => visionControl(id, 'vision_go');
+  el.visStop.onclick = () => visionControl(id, 'vision_stop');
   el.camStart.onclick = () => cameraControl(id, 'camera_start');
   el.camStop.onclick = () => cameraControl(id, 'camera_stop');
   el.camObserve.onclick = () => {
@@ -1671,6 +1734,43 @@ function renderTools(id) {
   }
 }
 
+// vision_drive 화면·대기 띠·출발/정지 버튼. 한 번도 소식이 없던 로봇은 숨긴다
+function renderVision(id, el, r) {
+  const vis = r && r.vision;
+  show(el.vis, !!vis);
+  if (!vis) return;
+  if (vis.online && vis.image) {
+    if (!visionTimers[id]) visionTimers[id] = setInterval(() => refreshVisionImage(id), 150);
+  } else if (visionTimers[id]) {
+    clearInterval(visionTimers[id]);
+    visionTimers[id] = 0;
+  }
+  const hold = vis.online ? vis.hold : null;
+  el.vis.classList.toggle('held', !!hold);
+  show(el.visHold, !!hold);
+  if (hold) setText(el.visHold, `Ⅱ ${hold.text} #${hold.id} · ${secs(hold.age_s || 0)}째 — ▶ 출발을 누르면 움직여요`);
+  const mode = vis.mode === 'drive' ? '주행' : '관찰(속도 명령 없음)';
+  const move = Number.isFinite(vis.linear) && Number.isFinite(vis.angular)
+    ? ` · v ${vis.linear.toFixed(2)} m/s, w ${vis.angular >= 0 ? '+' : ''}${vis.angular.toFixed(2)} rad/s` : '';
+  setText(el.visStatus, vis.online ? `vision_drive ${mode} · ${vis.policy || '판단 대기'}${move}`
+    : `vision_drive 소식 끊김 · 마지막 ${secs(vis.age_s || 0)} 전 — 로봇은 마지막 명령대로일 수 있어요`);
+  setClass(el.visStatus, 'cam-status ' + (vis.online ? 'online' : 'stale'));
+  const found = Array.isArray(vis.detections) && vis.detections.length ? `인식: ${vis.detections.join(', ')}` : '';
+  const perf = Number.isFinite(vis.inference_ms) ? ` · ${vis.inference_ms.toFixed(0)} ms` : '';
+  setText(el.visNote, vis.online ? found + perf + (vis.recording ? ' · ● 녹화 중' : '') : '');
+  el.visGo.disabled = !hold || visionPending[id];
+  el.visStop.disabled = !vis.online || !!hold || visionPending[id];
+  setAttr(el.visGo, 'aria-label', hold ? `${id} 출발 — 대기 #${hold.id} 해제` : `${id} 출발 (대기 중 아님)`);
+  // 새 대기가 생기거나 풀리면 기록에 한 번 남긴다
+  const key = hold ? hold.id : null;
+  if (key !== visionSeenHold[id]) {
+    if (hold) log(id, 'Ⅱ', `${hold.text} #${hold.id} — ▶ 출발을 누르면 움직여요`, 'warn');
+    else if (visionSeenHold[id] != null && vis.online)
+      log(id, PLAY, `대기 #${visionSeenHold[id]} 풀림 — ${vis.mode === 'drive' ? '주행' : '관찰 모드라 움직이지 않아요'}`, 'move');
+    visionSeenHold[id] = key;
+  }
+}
+
 function renderCard(id) {
   const el = ui[id], r = robot(id), v = view(id), t = track[id], n = r && r.nav;
   const mine = openIssues.filter(i => i.robot === id), crit = mine.some(i => i.crit);
@@ -1722,6 +1822,7 @@ function renderCard(id) {
   if (on) el.progBar.style.width = (Math.max(0, Math.min(1, 1 - n.feedback.distance / t.goalMax.max)) * 100).toFixed(1) + '%';
   setText(el.detail, v.detail); setAttr(el.detail, 'title', v.detail);
   setText(el.pos, v.pos || ''); setAttr(el.pos, 'title', v.pos || null);
+  renderVision(id, el, r);
   const camera = r && r.camera;
   card.classList.toggle('camera-enabled', !!(camera && camera.enabled));
   show(el.cam, !!(camera && camera.enabled));

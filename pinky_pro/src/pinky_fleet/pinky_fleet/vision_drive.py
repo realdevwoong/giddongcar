@@ -149,8 +149,8 @@ def parse_args(argv=None):
 
 
 class VisionDriveNode(Node):
-    def __init__(self, mode):
-        super().__init__('vision_drive')
+    def __init__(self, mode, context=None):
+        super().__init__('vision_drive', context=context)
         self.mode = mode
         self.scan = None
         self.scan_at = None

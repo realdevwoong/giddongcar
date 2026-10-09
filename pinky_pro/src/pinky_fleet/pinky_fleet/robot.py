@@ -15,6 +15,8 @@ from rclpy.time import Time
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy, qos_profile_sensor_data
 from nav_msgs.msg import OccupancyGrid, Path as NavPath, Odometry
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist, Vector3
+from sensor_msgs.msg import CompressedImage
+from std_msgs.msg import String
 from nav2_msgs.action import BackUp, NavigateToPose
 from pinky_interfaces.srv import SetLamp
 from pinky_fleet.localize import Localizer, SPIN_SPEED
@@ -29,6 +31,20 @@ from pinky_fleet.fleet_common import (
     LAMP, LAMP_HOLD, LAMP_TIMEOUT, LOC_TIMEOUT, NAV_ERRORS, NAV_STATES, NO_REASON,
     CommandError, await_future, pose_input, remember, seconds, yaw,
 )
+
+VISION_FRESH = 2.0   # s: older vision_drive state or image counts as gone
+
+
+def finite_json(value):
+    """vision_drive state with NaN/inf replaced by None, so /api/state stays valid JSON."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {str(key): finite_json(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [finite_json(item) for item in value]
+    return value
+
 
 class Robot(Node):
     def __init__(self, name, domain, use_sim_time=False, known_pose=False, auto_spin=False):
@@ -80,7 +96,16 @@ class Robot(Node):
         self.amcl_state = self.create_client(GetState, 'amcl/get_state')
         self.global_loc = self.create_client(Empty, 'reinitialize_global_localization')
         self.nomotion = self.create_client(Empty, 'request_nomotion_update')
-        self.cmd_vel = self.create_publisher(Twist, 'cmd_vel', 10)
+        # cmd_vel is created on first use (spin). vision_drive refuses to drive while any
+        # other node publishes cmd_vel, so watching it must not own one.
+        self.cmd_vel = None
+        # vision_drive in the same domain: its window image, policy state and go/stop
+        self.vision_state, self.vision_state_at = None, 0.0
+        self.vision_jpeg, self.vision_jpeg_at = None, 0.0
+        self.create_subscription(String, 'vision_drive/state', self.on_vision_state, qos_profile_sensor_data)
+        self.create_subscription(CompressedImage, 'vision_drive/overlay/compressed', self.on_vision_image,
+                                 qos_profile_sensor_data)
+        self.vision_command_pub = self.create_publisher(String, 'vision_drive/command', 10)
         self.create_timer(0.1, self.update_pose)
         self.create_timer(0.1, self.spin_tick)
         self.create_timer(1.0, self.check_lamp)
@@ -96,6 +121,65 @@ class Robot(Node):
             self.ros_executor.spin()
         except ExternalShutdownException:
             pass
+
+    def on_vision_state(self, msg):
+        try:
+            state = finite_json(json.loads(msg.data))
+        except ValueError:
+            return
+        if isinstance(state, dict):
+            with self.lock:
+                self.vision_state, self.vision_state_at = state, time.monotonic()
+
+    def on_vision_image(self, msg):
+        if 'jpeg' not in msg.format.lower() and 'jpg' not in msg.format.lower():
+            return
+        with self.lock:
+            self.vision_jpeg, self.vision_jpeg_at = bytes(msg.data), time.monotonic()
+
+    def vision_view(self):
+        """What the web shows about vision_drive; None if it never reported in this session."""
+        with self.lock:
+            state, state_at, image_at = self.vision_state, self.vision_state_at, self.vision_jpeg_at
+        if state is None:
+            return None
+        now = time.monotonic()
+        hold = state.get('hold') if isinstance(state.get('hold'), dict) else None
+        online = now - state_at < VISION_FRESH
+        return dict(state, hold=hold if online else None, online=online, age_s=round(now - state_at, 1),
+                    image=f'/vision/{self.robot_name}.jpg' if image_at and now - image_at < VISION_FRESH else None)
+
+    def vision_image(self):
+        with self.lock:
+            fresh = self.vision_jpeg is not None and time.monotonic() - self.vision_jpeg_at < VISION_FRESH
+            return self.vision_jpeg if fresh else None
+
+    def vision_command(self, action, body):
+        """▶ 출발 (vision_go, body {hold: id seen on screen}) or ■ 정지 (vision_stop) to vision_drive."""
+        if action == 'vision_go':
+            hold_id = body.get('hold') if isinstance(body, dict) else None
+            if isinstance(hold_id, bool) or not isinstance(hold_id, int):
+                raise CommandError('대기 번호(hold)가 필요합니다.', 'bad_hold')
+            view = self.vision_view()
+            if not view or not view['online']:
+                raise CommandError('vision_drive 상태가 안 들어와요. 같은 ROS 도메인에서 켜져 있는지 확인하세요.',
+                                   'vision_offline')
+            hold = view['hold']
+            if not hold:
+                raise CommandError('지금은 출발 신호를 기다리지 않아요.', 'vision_not_waiting')
+            if hold.get('id') != hold_id:
+                raise CommandError(f"화면에서 본 대기(#{hold_id})가 이미 끝났어요. 지금은 대기 #{hold.get('id')} — "
+                                   '화면을 보고 다시 누르세요.', 'vision_hold_changed')
+            payload = dict(action='go', hold=hold_id)
+        else:
+            payload = dict(action='stop')
+        if self.vision_command_pub.get_subscription_count() == 0:
+            raise CommandError('vision_drive가 신호를 받지 않아요(구독 없음). 켜져 있는지, 도메인이 같은지 확인하세요.',
+                               'vision_no_listener')
+        self.vision_command_pub.publish(String(data=json.dumps(payload)))
+        if action == 'vision_go':
+            return f'출발 신호 보냄 (대기 #{hold_id})'
+        return '정지 신호 보냄 — 출발 신호 전까지 멈춰 있어요'
 
     def on_map(self, msg):
         if msg.header.frame_id != 'map':
@@ -265,7 +349,7 @@ class Robot(Node):
             was, self.driving = self.driving, turning
             # 잠금 안에서 보낸다: stop_spin이 0을 보낸 뒤에 회전 속도가 끼어들지 않게
             if turning:
-                self.cmd_vel.publish(Twist(angular=Vector3(z=SPIN_SPEED)))
+                self.velocity().publish(Twist(angular=Vector3(z=SPIN_SPEED)))
             elif was:
                 self.send_zero()
 
@@ -278,7 +362,15 @@ class Robot(Node):
                 self.send_zero()
         return spun
 
+    def velocity(self):
+        """cmd_vel publisher, made the first time the dashboard drives (spin). 잠금 안에서 부른다."""
+        if self.cmd_vel is None:
+            self.cmd_vel = self.create_publisher(Twist, 'cmd_vel', 10)
+        return self.cmd_vel
+
     def send_zero(self):
+        if self.cmd_vel is None:
+            return           # 이 대시보드는 속도를 보낸 적이 없다
         for _ in range(3):   # Wi-Fi에서 하나가 늦어도 멈추게
             self.cmd_vel.publish(Twist())
 
@@ -325,7 +417,7 @@ class Robot(Node):
                         localize=self.localizer.snapshot(),
                         path=self.path if online else [], status=label, nav=nav, lamp=self.lamp,
                         clock_skew=round(getattr(self, 'clock_skew', 0.0), 2) if online else None,
-                        nav_ready=self.navigator.server_is_ready())
+                        nav_ready=self.navigator.server_is_ready(), vision=self.vision_view())
 
     def command(self, action, body):
         # Serialize HTTP requests per robot; the ROS executor remains independent.

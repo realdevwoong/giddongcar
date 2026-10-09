@@ -275,8 +275,10 @@ class FleetTests(unittest.TestCase):
                                 domain=25, pose={'x': 0}, map_id='same', path=[],
                                 navigator=SimpleNamespace(server_is_ready=lambda: True),
                                 localizer=Localizer(known=True), lamp_state=None, lamp=None, lamp_goal=None, lamp_since=0.0, lamp_sent=0.0,
-                                lamp_future=None, lamp_client=Mock())
+                                lamp_future=None, lamp_client=Mock(),
+                                vision_state=None, vision_state_at=0.0, vision_jpeg_at=0.0)
         robot.lamp_client.service_is_ready.return_value = lamp_ready
+        robot.vision_view = lambda: Robot.vision_view(robot)
         robot.lamp_client.call_async.side_effect = lambda request: self.lamp_reply()
         robot.set_lamp = lambda state: Robot.set_lamp(robot, state)
         robot.send_lamp = lambda state: Robot.send_lamp(robot, state)

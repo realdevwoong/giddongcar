@@ -106,6 +106,7 @@ class DashboardSpinTests(unittest.TestCase):
         robot = SimpleNamespace(lock=threading.RLock(), localizer=Localizer(), odom_yaw=0.0, driving=False,
                                 cmd_vel=Mock(), command_lock=threading.Lock(), backup_handle=None)
         robot.send_zero = lambda: Robot.send_zero(robot)
+        robot.velocity = lambda: Robot.velocity(robot)
         robot.stop_spin = lambda: Robot.stop_spin(robot)
         robot.localizer.started()
         robot.localizer.spin_start(time.monotonic(), 0.0)   # spin_tick이 실제 시계로 시간 초과를 본다

@@ -71,6 +71,9 @@ class Fleet:
     def command(self, robot_id, action, body):
         if robot_id not in self.robots:
             raise CommandError('Unknown robot or action', 'unknown_route')
+        if action in ('vision_go', 'vision_stop'):
+            # vision_drive가 직접 모는 로봇: 지도·Nav2와 상관없이 출발·정지 신호만 전한다
+            return self.robots[robot_id].vision_command(action, body)
         if action in ('camera_start', 'camera_stop'):
             controller = self.camera_controls.get(robot_id)
             if not controller:

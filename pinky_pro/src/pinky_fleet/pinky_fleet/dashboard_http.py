@@ -33,6 +33,13 @@ def handler_for(fleet):
                     self.send(503, dict(error='Camera stream is not active'))
                     return
                 self.send(200, image, 'image/jpeg')
+            elif route.startswith('/vision/') and route.endswith('.jpg'):
+                robot = fleet.robots.get(route[len('/vision/'): -len('.jpg')])
+                image = robot.vision_image() if robot is not None and hasattr(robot, 'vision_image') else None
+                if image is None:
+                    self.send(503, dict(error='vision_drive 영상이 없습니다'))
+                    return
+                self.send(200, image, 'image/jpeg')
             elif route.startswith('/camera/') and route.endswith('.mjpg'):
                 robot_id = route[len('/camera/'): -len('.mjpg')]
                 camera = fleet.cameras.get(robot_id)
