@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from pinky_fleet.vision_drive import _lane_error, _lane_mask, _mask_for_class, parse_args
+from pinky_fleet.vision_drive import _lane_error, _lane_mask, _mask_for_class, _overlay_status, parse_args
 
 PRESET = Path(__file__).resolve().parents[1] / 'config' / 'vision_drive_supervised.yaml'
 LANE_ARGS = SimpleNamespace(driveable_class='driveable_area', crosswalk_class='crosswalk')
@@ -92,3 +92,12 @@ def test_lane_mask_uses_crosswalk_when_driveable_missing():
     crosswalk = _rect(120, 240)
     assert np.array_equal(_lane_mask(_result((1, crosswalk)), LANE_ARGS, (240, 320)), crosswalk)
     assert _lane_mask(_result(), LANE_ARGS, (240, 320)) is None
+
+
+def test_overlay_status_is_ascii():
+    for command in ((0.04, -0.1, '코너 감속·조향'), (0.0, 0.15, '주행 영역 불명확: 방향 한정 재탐색'),
+                    (0.0, 0.0, '횡단보도 대기: 3.0초')):
+        assert _overlay_status(command).isascii()
+    assert _overlay_status((0.04, -0.1, '')).startswith('GO')
+    assert _overlay_status((0.0, 0.15, '')).startswith('TURN')
+    assert _overlay_status((0.0, 0.0, '')).startswith('STOP')

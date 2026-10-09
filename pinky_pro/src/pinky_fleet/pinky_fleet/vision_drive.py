@@ -276,6 +276,16 @@ def _lane_error(mask):
     return (lane_center - x_center) / max(1.0, width / 2.0)
 
 
+def _overlay_status(command):
+    """ASCII status line; OpenCV Hershey fonts draw Korean reasons as '???'."""
+    linear, angular, _ = command
+    if linear > 0:
+        return f'GO v={linear:.2f} w={angular:+.2f}'
+    if angular:
+        return f'TURN w={angular:+.2f}'
+    return 'STOP (reason: terminal policy=)'
+
+
 def _detections(result):
     output = []
     if result.boxes is None:
@@ -507,11 +517,14 @@ def main():
                     cv2.line(overlay, (width // 2, preview_y), (preview_x, preview_y),
                              (255, 0, 255), 2)
                 color = (0, 220, 0) if current_command[0] > 0 else (0, 0, 255)
-                cv2.putText(overlay, current_command[2], (8, 22), cv2.FONT_HERSHEY_SIMPLEX,
+                cv2.putText(overlay, _overlay_status(current_command), (8, 22), cv2.FONT_HERSHEY_SIMPLEX,
                             0.52, color, 2, cv2.LINE_AA)
                 cv2.putText(overlay, 'OBSERVE ONLY' if args.mode == 'observe' else
                             f'VERIFIED DRIVE  v={current_command[0]:.2f}',
                             (8, 44), cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 1, cv2.LINE_AA)
+                if video_writers:
+                    cv2.putText(overlay, 'REC', (overlay.shape[1] - 52, 22), cv2.FONT_HERSHEY_SIMPLEX,
+                                0.6, (0, 0, 255), 2, cv2.LINE_AA)
                 names = ', '.join(sorted({item[0] for item in detections})) or '탐지 없음'
                 LOGGER.info('mode=%s policy=%s command=(v=%.3f,w=%.3f) detections=%s inference=%.1fms',
                             args.mode, current_command[2], current_command[0], current_command[1],
