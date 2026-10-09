@@ -16,3 +16,4 @@ stop_distance: 0.35
 obstacle_min_width: 0.12
 corner_wall_distance: 0.45
 corner_max_turn_deg: 100.0
+corner_min_turn_deg: 60.0

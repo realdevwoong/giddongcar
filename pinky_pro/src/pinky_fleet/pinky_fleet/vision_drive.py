@@ -20,7 +20,9 @@ import cv2
 import numpy as np
 import rclpy
 from geometry_msgs.msg import Twist
+from nav_msgs.msg import Odometry
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
 from tf2_ros import Buffer, TransformException, TransformListener
@@ -78,6 +80,9 @@ def parse_args(argv=None):
     parser.add_argument('--corner-max-turn-deg', type=float, default=100.0,
                         help='코너에서 차선을 잃었을 때 한쪽으로 제자리 회전할 최대 각도(도). '
                              '예상 방향으로 먼저 돌고, 못 찾으면 반대쪽으로 같은 각도까지 돈다. 0이면 회전 안 함')
+    parser.add_argument('--corner-min-turn-deg', type=float, default=60.0,
+                        help='정면 벽 앞에서 시작한 코너 회전은 odom으로 이 각도(도)를 돌기 전에는 끝내지 않는다. '
+                             '20~30°만 돌고 전진해 코너 안쪽 테이프를 넘던 문제를 막는다. 0이면 끔')
     parser.add_argument('--headless', action='store_true', help='OpenCV 영상 창을 띄우지 않음')
     parser.add_argument('--output-dir', default='~/vision_drive_observations',
                         help='프레임·녹화 영상(r)·실행 로그를 저장할 디렉터리')
@@ -147,6 +152,12 @@ class VisionDriveNode(Node):
         self.tf_buffer = Buffer(node=self)
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.subscription = self.create_subscription(LaserScan, 'scan', self._on_scan, 10)
+        # Wheel odometry heading measures how far a corner pivot really turned;
+        # the commanded rate alone overestimates it on carpet.
+        self.odom_yaw = None
+        self.odom_at = None
+        self._odom_raw = None
+        self.create_subscription(Odometry, 'odom', self._on_odom, qos_profile_sensor_data)
         self.command_pub = self.create_publisher(Twist, 'cmd_vel', 10) if mode == 'drive' else None
 
     def _on_scan(self, message):
@@ -160,6 +171,22 @@ class VisionDriveNode(Node):
             self.scan_yaw = yaw(transform.transform.rotation)
             LOGGER.info('라이다 방향: %s 은(는) base_link 기준 %.0f도 돌아가 있음',
                         message.header.frame_id, math.degrees(self.scan_yaw))
+
+    def _on_odom(self, message):
+        heading = yaw(message.pose.pose.orientation)
+        if self._odom_raw is None:
+            self.odom_yaw = heading
+        else:
+            # Unwrapped, so a pivot through +-180 degrees keeps counting.
+            self.odom_yaw += math.atan2(math.sin(heading - self._odom_raw), math.cos(heading - self._odom_raw))
+        self._odom_raw = heading
+        self.odom_at = time.monotonic()
+
+    def heading(self, max_age=0.5):
+        """Unwrapped odometry yaw in radians (+ = left), or None without fresh odom."""
+        if self.odom_at is None or time.monotonic() - self.odom_at > max_age:
+            return None
+        return self.odom_yaw
 
     def _beams(self, half_angle, center=0.0, max_age=0.5):
         """Ranges in a sector of the robot frame; no return counts as range_max (open).
@@ -420,31 +447,74 @@ def _corner_pick(node):
     return direction, '카메라 직전 조향' + detail
 
 
+def _corner_heading(node):
+    heading = getattr(node, 'heading', None)
+    return heading() if heading else None
+
+
+def _corner_turned(node, corner, now, args):
+    """Signed rotation since the corner began in radians (+ = left).
+
+    Odometry when the corner started with a fresh heading. Without odometry the
+    commanded rate times time, which overestimates a pivot on carpet.
+    """
+    if corner.get('yaw0') is not None:
+        heading = _corner_heading(node)
+        if heading is not None:
+            corner['turned'] = heading - corner['yaw0']
+        return corner['turned']
+    rate = max(args.max_angular, 1e-6)
+    sweep = math.radians(args.corner_max_turn_deg) / rate
+    elapsed = now - corner['started_at']
+    if elapsed < sweep:
+        return corner['first'] * rate * elapsed
+    return corner['first'] * rate * (2.0 * sweep - elapsed)
+
+
 def _corner_pivot(node, args, now, trigger='차선 소실'):
     """Bounded in-place search at a corner.
 
     Turn toward the chosen side up to corner_max_turn_deg, then sweep back to the
     same angle on the other side, then stop for good. Never moves forward, and the
-    heading stays within +/- corner_max_turn_deg of where the corner began.
+    heading stays within +/- corner_max_turn_deg of where the corner began. With
+    odometry the angles are measured; time limits remain as a backstop.
     """
     corner = getattr(node, 'corner', None)
     if corner is None:
         first, basis = _corner_pick(node)
-        corner = node.corner = dict(first=first, direction=first, started_at=now, failed=False, overshoot=0)
-        LOGGER.info('코너 진입(%s): %s으로 회전 (%s)', trigger, '왼쪽' if first > 0 else '오른쪽', basis)
+        # A wall filling the front means a real corner: do not stop turning early.
+        at_wall = trigger.startswith('정면 벽') or bool(node.wall_ahead(args.corner_wall_distance))
+        corner = node.corner = dict(
+            first=first, direction=first, started_at=now, failed=False, overshoot=0,
+            yaw0=_corner_heading(node), turned=0.0, phase='first', phase_at=now,
+            min_turn=math.radians(max(0.0, args.corner_min_turn_deg)) if at_wall else 0.0)
+        LOGGER.info('코너 진입(%s): %s으로 회전 (%s, 회전량 %s)', trigger, '왼쪽' if first > 0 else '오른쪽', basis,
+                    'odom' if corner['yaw0'] is not None else 'odom 없음: 시간으로 추정')
     rate = args.max_angular
     if rate <= 0.0 or args.corner_max_turn_deg <= 0.0:
         return 0.0, 0.0, '주행 영역 불명확: 정지'
-    sweep = math.radians(args.corner_max_turn_deg) / rate
-    elapsed = now - corner['started_at']
-    if corner['failed'] or elapsed >= 3.0 * sweep:
+    limit = math.radians(args.corner_max_turn_deg)
+    sweep = limit / rate
+    if corner['yaw0'] is not None:
+        turned = _corner_turned(node, corner, now, args)
+        # Allow for a robot that turns slower than commanded before giving up on a side.
+        if corner['phase'] == 'first' and (corner['first'] * turned >= limit - 1e-6
+                                            or now - corner['started_at'] >= 1.5 * sweep):
+            corner['phase'], corner['phase_at'] = 'back', now
+        give_up = corner['phase'] == 'back' and (-corner['first'] * turned >= limit - 1e-6
+                                                  or now - corner['phase_at'] >= 3.0 * sweep)
+    else:
+        elapsed = now - corner['started_at']
+        corner['phase'] = 'first' if elapsed < sweep else 'back'
+        give_up = elapsed >= 3.0 * sweep
+    if corner['failed'] or give_up:
         if not corner['failed']:
             corner['failed'] = True
             # Do not spin again at this wall; the obstacle stop-and-wait applies instead.
             node.corner_blocked_until = now + 15.0
             LOGGER.warning('코너에서 차선을 못 찾음: 정지 (양쪽 %.0f도 탐색)', args.corner_max_turn_deg)
         return 0.0, 0.0, '코너에서 차선을 못 찾음: 정지'
-    if elapsed < sweep:
+    if corner['phase'] == 'first':
         direction, phase = corner['first'], '예상 방향'
     else:
         direction, phase = -corner['first'], '반대쪽'
@@ -453,7 +523,7 @@ def _corner_pivot(node, args, now, trigger='차선 소실'):
     return 0.0, direction * rate, f'{CORNER_REASON}: {side} ({phase})'
 
 
-def _corner_keeps_turning(node, args, corner, error):
+def _corner_keeps_turning(node, args, corner, error, now):
     """While pivoting, keep turning until the lane sits ahead and the wall is gone.
 
     Resuming early (lane at the side, wall still close) drove a forward arc that
@@ -463,6 +533,11 @@ def _corner_keeps_turning(node, args, corner, error):
         return True
     if corner['failed']:
         return abs(error) > 0.25            # only a lane ahead ends a failed search
+    if abs(_corner_turned(node, corner, now, args)) < corner.get('min_turn', 0.0):
+        # 2026-10-09 17:15: the floor in front of a corner wall looks wide and
+        # centred after ~20-30 degrees; driving on from there crossed the tape.
+        corner['overshoot'] = 0
+        return True
     if abs(error) > 0.25 and error * corner['direction'] > 0:
         # Lane firmly on the far side for several frames: we overshot, steering takes over.
         corner['overshoot'] += 1
@@ -519,8 +594,13 @@ def _policy(node, mask, detections, args, inference_at, camera_at):
     error = _lane_error(mask)
     corner = getattr(node, 'corner', None)
     if corner is not None:
-        if _corner_keeps_turning(node, args, corner, error):
+        if _corner_keeps_turning(node, args, corner, error, now):
             return _corner_pivot(node, args, now)
+        turned = math.degrees(_corner_turned(node, corner, now, args))
+        clear = node.front_clear()
+        LOGGER.info('코너 회전 끝: %s %.0f도 (%s), 조향 %.2f, 정면 %s', '왼쪽' if turned >= 0 else '오른쪽',
+                    abs(turned), 'odom' if corner['yaw0'] is not None else '시간 추정', error,
+                    '없음' if clear is None else f'{clear:.2f} m')
         node.corner = None
     elif error is None:
         return _corner_pivot(node, args, now)
@@ -629,6 +709,9 @@ def main():
                 or not math.isfinite(args.corner_max_turn_deg)
                 or args.corner_max_turn_deg < 0.0
                 or args.corner_max_turn_deg > 120.0
+                or not math.isfinite(args.corner_min_turn_deg)
+                or args.corner_min_turn_deg < 0.0
+                or (args.corner_max_turn_deg > 0.0 and args.corner_min_turn_deg > args.corner_max_turn_deg)
                 or not math.isfinite(args.crosswalk_stop_seconds)
                 or args.crosswalk_stop_seconds < 0.0):
             raise SystemExit('초기 주행 한도는 max-linear <= 0.10 m/s, max-angular <= 0.60 rad/s, '
@@ -637,6 +720,7 @@ def main():
                              'stop-distance >= 0.20 m, obstacle-min-width between 0.03 and 0.50 m, '
                              'corner-wall-distance 0 or between stop-distance+0.05 and 0.80 m, '
                              'corner-max-turn-deg between 0 and 120, '
+                             'corner-min-turn-deg between 0 and corner-max-turn-deg, '
                              'crosswalk-stop-seconds >= 0 입니다.')
 
     try:

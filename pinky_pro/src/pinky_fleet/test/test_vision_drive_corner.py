@@ -14,7 +14,8 @@ SWEEP = math.radians(100.0) / 0.25     # 기본 100도, 0.25 rad/s → 한쪽 �
 @pytest.fixture
 def drive(monkeypatch):
     """가짜 시계와 가짜 조향값으로 _policy를 한 프레임씩 돌린다."""
-    state = SimpleNamespace(now=100.0, error=None, wall=False, sides=None, clear=math.inf, front=math.inf)
+    state = SimpleNamespace(now=100.0, error=None, wall=False, sides=None, clear=math.inf, front=math.inf,
+                            heading=None)
     monkeypatch.setattr(vd, 'time', SimpleNamespace(monotonic=lambda: state.now))
     monkeypatch.setattr(vd, '_lane_error', lambda mask: state.error)
     args = vd.parse_args(['--robot-ip', '192.0.2.1', '--model', 'm.pt', '--mode', 'drive',
@@ -22,7 +23,8 @@ def drive(monkeypatch):
     node = SimpleNamespace(front_range=lambda min_width: state.front,   # 정지 판단용 전방 장애물 거리
                            front_clear=lambda: state.clear,             # 정면 ±10° 빈 거리
                            wall_ahead=lambda distance: state.wall,      # 정면 벽(코너) 여부
-                           side_clearance=lambda: state.sides)          # (왼쪽, 오른쪽) 여유 거리
+                           side_clearance=lambda: state.sides,          # (왼쪽, 오른쪽) 여유 거리
+                           heading=lambda: state.heading)               # odom 방향(rad). None이면 시간으로 추정
 
     def step(error, dt=0.1, **lidar):
         state.now += dt
@@ -106,9 +108,46 @@ def test_pivot_holds_until_front_cone_is_clear(drive):
     for _ in range(12):                                   # 실물: 20°쯤 돌면 벽 판정이 풀리고 바닥이 넓게 보인다
         _, angular, reason = drive(0.0, wall=False, clear=0.6)
         assert angular == pytest.approx(0.25) and reason.startswith(vd.CORNER_REASON)
-    linear, _, reason = drive(0.0, clear=2.0)             # 새 복도 정면 → 전진
+    assert drive(0.0, clear=2.0)[2].startswith(vd.CORNER_REASON)   # 정면이 트여도 아직 약 19°: 계속 회전
+    linear, _, reason = drive(0.0, dt=3.0, clear=2.0)     # 60° 넘게 돌았고 새 복도 정면 → 전진
     assert linear > 0.0 and not reason.startswith(vd.CORNER_REASON)
     assert drive.node.corner is None
+
+
+def test_wall_corner_turns_at_least_min_angle_by_odom(drive):
+    # 실물 17:15: 20~30°만 돌고 바닥이 넓게 보이자 전진해 코너 안쪽으로 파고들었다
+    drive(0.0, wall=True, sides=(1.6, 0.3), clear=0.45, heading=0.0)
+    for degrees in (10, 25, 40, 55):                       # 차선이 앞에 있고 정면도 트였지만 아직 60° 전
+        _, angular, reason = drive(0.0, wall=False, clear=2.0, heading=math.radians(degrees))
+        assert angular == pytest.approx(0.25) and reason.startswith(vd.CORNER_REASON)
+    linear, _, _ = drive(0.0, clear=2.0, heading=math.radians(65))
+    assert linear > 0.0 and drive.node.corner is None
+
+
+def test_lane_lost_away_from_wall_needs_no_min_angle(drive):
+    drive(-0.1, heading=0.0)
+    drive(None, heading=0.0)                               # 벽 없이 차선만 잃음: 다시 찾으면 바로 출발
+    linear, _, _ = drive(0.0, clear=2.0, heading=math.radians(15))
+    assert linear > 0.0
+
+
+def test_odom_limits_each_side_by_measured_angle(drive):
+    drive(-0.1, heading=0.0)
+    assert drive(None, heading=0.0)[1] == pytest.approx(0.25)                 # 왼쪽 먼저
+    # 명령 속도로는 100°를 넘을 시간이지만 실제로는 70°만 돌았다 → 아직 왼쪽
+    assert drive(None, dt=SWEEP + 0.1, heading=math.radians(70))[1] == pytest.approx(0.25)
+    assert drive(None, heading=math.radians(101))[1] == pytest.approx(-0.25)  # 100° 도달 → 반대쪽
+    assert drive(None, dt=2.0, heading=math.radians(-20))[1] == pytest.approx(-0.25)
+    linear, angular, reason = drive(None, heading=math.radians(-101))         # 반대쪽 100°까지 없음 → 정지
+    assert (linear, angular) == (0.0, 0.0) and '못 찾음' in reason
+
+
+def test_odom_stuck_robot_still_gives_up_by_time(drive):
+    drive(-0.1, heading=0.0)
+    drive(None, heading=0.0)
+    assert drive(None, dt=1.5 * SWEEP + 0.1, heading=0.0)[1] == pytest.approx(-0.25)   # 안 돌아도 시간이 지나면 반대쪽
+    linear, angular, reason = drive(None, dt=3.0 * SWEEP + 0.1, heading=0.0)
+    assert (linear, angular) == (0.0, 0.0) and '못 찾음' in reason
 
 
 def test_pivot_exits_after_persistent_overshoot(drive):
@@ -136,3 +175,23 @@ def test_failed_search_stays_stopped_and_does_not_spin_again(drive):
     assert drive(0.8)[:2] == (0.0, 0.0)               # 옆에 보이는 것으로는 부족
     linear, _, reason = drive(0.0, wall=True)         # 앞에 차선: 출발. 같은 벽으로 코너 재진입은 15초 금지
     assert linear > 0.0 and not reason.startswith(vd.CORNER_REASON)
+
+
+def test_odom_heading_unwraps_and_expires(monkeypatch):
+    from nav_msgs.msg import Odometry
+    clock = SimpleNamespace(now=50.0)
+    monkeypatch.setattr(vd, 'time', SimpleNamespace(monotonic=lambda: clock.now))
+    node = SimpleNamespace(odom_yaw=None, odom_at=None, _odom_raw=None)
+
+    def odom(degrees):
+        message = Odometry()
+        message.pose.pose.orientation.z = math.sin(math.radians(degrees) / 2)
+        message.pose.pose.orientation.w = math.cos(math.radians(degrees) / 2)
+        vd.VisionDriveNode._on_odom(node, message)
+
+    assert vd.VisionDriveNode.heading(node) is None                 # odom을 아직 못 받음
+    odom(170.0)
+    odom(-170.0)                                                    # +-180°를 지나도 이어서 센다
+    assert math.degrees(vd.VisionDriveNode.heading(node)) == pytest.approx(190.0)
+    clock.now += 0.6
+    assert vd.VisionDriveNode.heading(node) is None                 # 0.5초 넘게 끊기면 쓰지 않는다
