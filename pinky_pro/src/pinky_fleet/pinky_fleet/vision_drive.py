@@ -21,10 +21,13 @@ import numpy as np
 import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
+from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
+from tf2_ros import Buffer, TransformException, TransformListener
 
 from pinky_fleet.camera_control import PinkyCameraControl
 from pinky_fleet.camera_stream import MJPEGCamera
+from pinky_fleet.fleet_common import yaw
 
 
 LOGGER = logging.getLogger('vision_drive')
@@ -134,25 +137,41 @@ class VisionDriveNode(Node):
         self.mode = mode
         self.scan = None
         self.scan_at = None
+        # Pinky mounts the lidar rotated by pi (URDF rplidar_link), so raw scan
+        # angle 0 looks backwards. The yaw comes from the robot's static TF.
+        self.scan_yaw = None
+        self.tf_buffer = Buffer(node=self)
+        self.tf_listener = TransformListener(self.tf_buffer, self)
         self.subscription = self.create_subscription(LaserScan, 'scan', self._on_scan, 10)
         self.command_pub = self.create_publisher(Twist, 'cmd_vel', 10) if mode == 'drive' else None
 
     def _on_scan(self, message):
         self.scan = message
         self.scan_at = time.monotonic()
+        if self.scan_yaw is None:
+            try:
+                transform = self.tf_buffer.lookup_transform('base_link', message.header.frame_id, Time())
+            except TransformException:
+                return
+            self.scan_yaw = yaw(transform.transform.rotation)
+            LOGGER.info('라이다 방향: %s 은(는) base_link 기준 %.0f도 돌아가 있음',
+                        message.header.frame_id, math.degrees(self.scan_yaw))
 
     def front_range(self, max_age=0.5, half_angle=math.radians(22.5), min_width=0.12):
         """Nearest substantial obstacle ahead in metres.
 
-        None means no fresh scan (stop). math.inf means the scan is fresh and
-        the front sector is clear, which must not be confused with a lost lidar.
+        None means no fresh scan or unknown lidar orientation (stop). math.inf
+        means the scan is fresh and the front sector is clear, which must not be
+        confused with a lost lidar.
         """
         if self.scan is None or self.scan_at is None or time.monotonic() - self.scan_at > max_age:
+            return None
+        if self.scan_yaw is None:
             return None
         points = []
         scan = self.scan
         for index, distance in enumerate(scan.ranges):
-            angle = scan.angle_min + index * scan.angle_increment
+            angle = scan.angle_min + index * scan.angle_increment + self.scan_yaw
             angle = math.atan2(math.sin(angle), math.cos(angle))
             if abs(angle) <= half_angle and math.isfinite(distance):
                 if scan.range_min <= distance <= scan.range_max:
@@ -176,8 +195,9 @@ class VisionDriveNode(Node):
             previous_index, previous_xy = index, xy
         if current:
             clusters.append(current)
-        # A scan that starts at 0 rad splits the straight-ahead object across the
-        # end and the start of the array; join it so its width is not halved.
+        # When the robot front falls on the array boundary (Pinky: scan -pi..pi
+        # with yaw pi), the straight-ahead object is split across the end and the
+        # start of the array; join it so its width is not halved.
         if (len(clusters) > 1 and points[0][0] == 0 and points[-1][0] == len(scan.ranges) - 1
                 and math.dist(clusters[0][0][0], clusters[-1][-1][0]) <= 0.06):
             clusters[0] = clusters.pop() + clusters[0]
@@ -482,6 +502,9 @@ def main():
             if others:
                 raise RuntimeError('다른 /cmd_vel 발행자가 있습니다. Nav2/대시보드를 중지한 뒤 다시 실행하세요: '
                                    + ', '.join(info.node_name for info in others))
+            if node.scan is not None and node.scan_yaw is None:
+                raise RuntimeError(f'라이다 방향 TF(base_link → {node.scan.header.frame_id})를 받지 못했습니다. '
+                                   '로봇 bringup의 robot_state_publisher가 켜져 있는지 확인하세요.')
             if node.front_range(min_width=args.obstacle_min_width) is None:
                 raise RuntimeError('라이다 /scan이 아직 유효하지 않습니다. 로봇 ROS 도메인과 토픽을 확인하세요.')
             LOGGER.warning('감독형 저속 주행 실험 시작. 즉시 정지하려면 창에서 q를 누르세요.')
