@@ -15,7 +15,9 @@ PINKY = dict(angle_min=-math.pi, scan_yaw=math.pi)   # sllidar -pi..pi, URDF rpl
 def _node(ranges, angle_min=-math.pi, age=0.0, scan_yaw=0.0):
     scan = SimpleNamespace(ranges=ranges, angle_min=angle_min, angle_increment=STEP,
                            range_min=0.05, range_max=8.0)
-    return SimpleNamespace(scan=scan, scan_at=time.monotonic() - age, scan_yaw=scan_yaw)
+    node = SimpleNamespace(scan=scan, scan_at=time.monotonic() - age, scan_yaw=scan_yaw)
+    node._beams = lambda *a, **k: VisionDriveNode._beams(node, *a, **k)
+    return node
 
 
 def _front(node):
@@ -95,3 +97,27 @@ def test_scan_yaw_read_from_tf_once_available():
     node.tf_buffer = _Buffer(SimpleNamespace(x=0.0, y=0.0, z=1.0, w=0.0))   # z축 180도
     VisionDriveNode._on_scan(node, _scan_message())
     assert abs(node.scan_yaw) == pytest.approx(math.pi)
+
+
+def test_pinky_wall_ahead_spans_front_sector():
+    # 정면(배열 경계) ±30도 전부 0.40 m → 코스 벽
+    node = _node(_ranges_with(list(range(-30, 31)), 0.40), **PINKY)
+    assert VisionDriveNode.wall_ahead(node, 0.45) is True
+    assert VisionDriveNode.wall_ahead(node, 0.35) is False
+
+
+def test_pinky_narrow_box_is_not_a_wall():
+    node = _node(_ranges_with(list(range(-12, 13)), 0.40), **PINKY)
+    assert VisionDriveNode.wall_ahead(node, 0.45) is False
+
+
+def test_pinky_side_clearance_left_and_right():
+    # 로봇 왼쪽(+90도)은 scan 각도 -90도 = 90번 부근, 오른쪽은 270번 부근. 반환 없음(inf)은 range_max로 본다.
+    ranges = [math.inf] * 360
+    for i in range(50, 131):
+        ranges[i] = 2.0
+    for i in range(230, 311):
+        ranges[i] = 0.3
+    left, right = VisionDriveNode.side_clearance(_node(ranges, **PINKY))
+    assert left == pytest.approx(2.0) and right == pytest.approx(0.3)
+    assert VisionDriveNode.side_clearance(_node(ranges, scan_yaw=None)) is None

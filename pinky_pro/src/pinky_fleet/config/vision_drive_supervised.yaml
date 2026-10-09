@@ -8,10 +8,11 @@ device: auto
 driveable_class: driveable_area
 crosswalk_action: stop-then-go
 crosswalk_stop_seconds: 10.0
-max_linear: 0.05
-max_angular: 0.25
+max_linear: 0.08
+max_angular: 0.40
 steering_gain: 1.2
 turn_radius_limit: 0.08
 stop_distance: 0.35
 obstacle_min_width: 0.12
+corner_wall_distance: 0.45
 corner_max_turn_deg: 100.0

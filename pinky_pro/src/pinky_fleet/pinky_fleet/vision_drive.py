@@ -62,8 +62,8 @@ def parse_args(argv=None):
                         help='로봇 측 cmd_vel 정지 watchdog과 비상정지를 확인')
     parser.add_argument('--confirm-attended-test-without-watchdog', action='store_true',
                         help='로봇 watchdog 없이 시험함을 확인; 사람이 로봇 옆에서 물리 비상정지를 잡고 감독')
-    parser.add_argument('--max-linear', type=float, default=0.05, help='최대 전진 속도 m/s')
-    parser.add_argument('--max-angular', type=float, default=0.25, help='최대 회전 속도 rad/s')
+    parser.add_argument('--max-linear', type=float, default=0.08, help='최대 전진 속도 m/s (한도 0.10)')
+    parser.add_argument('--max-angular', type=float, default=0.40, help='최대 회전 속도 rad/s (한도 0.60)')
     parser.add_argument('--steering-gain', type=float, default=1.2,
                         help='먼 쪽 주행 영역 중심 오차에 적용할 조향 gain')
     parser.add_argument('--turn-radius-limit', type=float, default=0.08,
@@ -72,6 +72,9 @@ def parse_args(argv=None):
                         help='라이다 전방 정지 거리 m (제동 시험 전 보수적 초기값)')
     parser.add_argument('--obstacle-min-width', type=float, default=0.12,
                         help='정지 장애물로 볼 LiDAR 물체의 최소 가로 폭 m')
+    parser.add_argument('--corner-wall-distance', type=float, default=0.45,
+                        help='차선이 정면의 코스 벽을 향하고 벽이 이 거리(m) 안이면 바로 코너로 보고 제자리 회전. '
+                             '0이면 차선이 사라질 때까지 기다림')
     parser.add_argument('--corner-max-turn-deg', type=float, default=100.0,
                         help='코너에서 차선을 잃었을 때 한쪽으로 제자리 회전할 최대 각도(도). '
                              '예상 방향으로 먼저 돌고, 못 찾으면 반대쪽으로 같은 각도까지 돈다. 0이면 회전 안 함')
@@ -157,6 +160,46 @@ class VisionDriveNode(Node):
             self.scan_yaw = yaw(transform.transform.rotation)
             LOGGER.info('라이다 방향: %s 은(는) base_link 기준 %.0f도 돌아가 있음',
                         message.header.frame_id, math.degrees(self.scan_yaw))
+
+    def _beams(self, half_angle, center=0.0, max_age=0.5):
+        """Ranges in a sector of the robot frame; no return counts as range_max (open).
+
+        None when there is no fresh scan or the lidar orientation is unknown.
+        """
+        if self.scan is None or self.scan_at is None or time.monotonic() - self.scan_at > max_age:
+            return None
+        if self.scan_yaw is None:
+            return None
+        scan = self.scan
+        beams = []
+        for index, distance in enumerate(scan.ranges):
+            angle = scan.angle_min + index * scan.angle_increment + self.scan_yaw - center
+            angle = math.atan2(math.sin(angle), math.cos(angle))
+            if abs(angle) > half_angle:
+                continue
+            if not math.isfinite(distance) or distance > scan.range_max:
+                beams.append(scan.range_max)
+            elif distance >= scan.range_min:
+                beams.append(distance)
+        return beams
+
+    def wall_ahead(self, distance, half_angle=math.radians(30.0)):
+        """True when something spans the whole front sector within `distance`.
+
+        A course wall at a corner fills the sector; a box in the lane does not.
+        """
+        beams = self._beams(half_angle)
+        if not beams or len(beams) < 10:
+            return False
+        return sum(beam <= distance for beam in beams) / len(beams) >= 0.75
+
+    def side_clearance(self, half_angle=math.radians(40.0)):
+        """(left, right) median free range around +/-90 degrees, or None."""
+        left = self._beams(half_angle, math.radians(90.0))
+        right = self._beams(half_angle, -math.radians(90.0))
+        if not left or not right:
+            return None
+        return float(np.median(left)), float(np.median(right))
 
     def front_range(self, max_age=0.5, half_angle=math.radians(22.5), min_width=0.12):
         """Nearest substantial obstacle ahead in metres.
@@ -348,31 +391,71 @@ def _corner_direction(history, window=1.0):
     return -1 if sum(recent) / len(recent) > 0 else 1
 
 
-def _corner_pivot(node, args, now):
-    """Bounded in-place search after the lane disappears, e.g. at a 90-degree corner.
+def _corner_pick(node):
+    """Choose the pivot side: lidar clearance first, camera lean as the fallback.
 
-    Turn toward the guessed side up to corner_max_turn_deg, then sweep back to the
-    same angle on the other side, then stop. Never moves forward, and the heading
-    stays within +/- corner_max_turn_deg of where the lane was lost.
+    At a corner the lane continues on the open side while the course wall closes
+    the other one, so the side with more free range is the turn. The camera guess
+    was wrong on 1 of 2 real corners (2026-10-09), which cost a 300-degree sweep.
+    """
+    clearance = node.side_clearance()
+    if clearance:
+        left, right = clearance
+        if left >= right * 1.3 and left - right >= 0.15:
+            return 1, f'라이다 좌 {left:.2f} m > 우 {right:.2f} m'
+        if right >= left * 1.3 and right - left >= 0.15:
+            return -1, f'라이다 우 {right:.2f} m > 좌 {left:.2f} m'
+    direction = _corner_direction(getattr(node, 'lane_error_history', []))
+    detail = f' (라이다 좌 {clearance[0]:.2f} 우 {clearance[1]:.2f} 비슷)' if clearance else ' (라이다 없음)'
+    return direction, '카메라 직전 조향' + detail
+
+
+def _corner_pivot(node, args, now):
+    """Bounded in-place search at a corner.
+
+    Turn toward the chosen side up to corner_max_turn_deg, then sweep back to the
+    same angle on the other side, then stop for good. Never moves forward, and the
+    heading stays within +/- corner_max_turn_deg of where the corner began.
     """
     corner = getattr(node, 'corner', None)
     if corner is None:
-        corner = node.corner = dict(first=_corner_direction(getattr(node, 'lane_error_history', [])),
-                                    started_at=now)
+        first, basis = _corner_pick(node)
+        corner = node.corner = dict(first=first, direction=first, started_at=now, failed=False)
+        LOGGER.info('코너 진입: %s으로 회전 (%s)', '왼쪽' if first > 0 else '오른쪽', basis)
     rate = args.max_angular
-    if rate <= 0.0:
+    if rate <= 0.0 or args.corner_max_turn_deg <= 0.0:
         return 0.0, 0.0, '주행 영역 불명확: 정지'
     sweep = math.radians(args.corner_max_turn_deg) / rate
     elapsed = now - corner['started_at']
+    if corner['failed'] or elapsed >= 3.0 * sweep:
+        if not corner['failed']:
+            corner['failed'] = True
+            # Do not spin again at this wall; the obstacle stop-and-wait applies instead.
+            node.corner_blocked_until = now + 15.0
+            LOGGER.warning('코너에서 차선을 못 찾음: 정지 (양쪽 %.0f도 탐색)', args.corner_max_turn_deg)
+        return 0.0, 0.0, '코너에서 차선을 못 찾음: 정지'
     if elapsed < sweep:
         direction, phase = corner['first'], '예상 방향'
-    elif elapsed < 3.0 * sweep:
-        direction, phase = -corner['first'], '반대쪽'
     else:
-        return 0.0, 0.0, '코너에서 차선을 못 찾음: 정지'
+        direction, phase = -corner['first'], '반대쪽'
     corner['direction'] = direction
     side = '왼쪽' if direction > 0 else '오른쪽'
     return 0.0, direction * rate, f'{CORNER_REASON}: {side} ({phase})'
+
+
+def _corner_keeps_turning(node, args, corner, error):
+    """While pivoting, keep turning until the lane sits ahead and the wall is gone.
+
+    Resuming early (lane at the side, wall still close) drove a forward arc that
+    cut the inner tape on 2026-10-09.
+    """
+    if error is None:
+        return True
+    if corner['failed']:
+        return abs(error) > 0.25            # only a lane ahead ends a failed search
+    if abs(error) > 0.25:
+        return error * corner['direction'] < 0   # still entering from the turning side
+    return node.wall_ahead(args.corner_wall_distance)
 
 
 def _drive_guard(command, front, stop_distance):
@@ -416,16 +499,24 @@ def _policy(node, mask, detections, args, inference_at, camera_at):
         return 0.0, 0.0, '카메라/인식 지연: 정지'
     error = _lane_error(mask)
     corner = getattr(node, 'corner', None)
-    # Keep pivoting while the lane re-enters from the turning side but is not yet ahead.
-    if error is None or (corner is not None and abs(error) > 0.5 and error * corner['direction'] < 0):
+    if corner is not None:
+        if _corner_keeps_turning(node, args, corner, error):
+            return _corner_pivot(node, args, now)
+        node.corner = None
+    elif error is None:
         return _corner_pivot(node, args, now)
-    node.corner = None
     history = getattr(node, 'lane_error_history', [])
     history.append((now, error))
     node.lane_error_history = [item for item in history if now - item[0] <= 2.0]
     front = node.front_range(min_width=args.obstacle_min_width)
     if args.mode == 'drive' and front is None:
         return 0.0, 0.0, '라이다 입력 없음/지연: 정지'
+    # The lane points straight at a course wall that fills the front: a corner.
+    # Turn now instead of crawling up to the wall until the lane disappears.
+    if (args.corner_wall_distance > 0.0 and abs(error) <= 0.25
+            and now >= getattr(node, 'corner_blocked_until', 0.0)
+            and node.wall_ahead(args.corner_wall_distance)):
+        return _corner_pivot(node, args, now)
     if front is not None and front <= args.stop_distance:
         return 0.0, 0.0, f'전방 장애물 {front:.2f} m: 정지'
 
@@ -501,8 +592,11 @@ def main():
             raise SystemExit('주행 모드에는 --enable-motion, --confirm-supervised-test, '
                              '그리고 --watchdog-verified 또는 '
                              '--confirm-attended-test-without-watchdog가 필요합니다.')
-        if (args.max_linear <= 0 or args.max_linear > 0.05
-                or args.max_angular <= 0 or args.max_angular > 0.25
+        wall_distance_ok = (args.corner_wall_distance == 0.0
+                            or args.stop_distance + 0.05 <= args.corner_wall_distance <= 0.80)
+        if (args.max_linear <= 0 or args.max_linear > 0.10
+                or args.max_angular <= 0 or args.max_angular > 0.60
+                or not math.isfinite(args.corner_wall_distance) or not wall_distance_ok
                 or not math.isfinite(args.steering_gain)
                 or args.steering_gain <= 0.0 or args.steering_gain > 2.0
                 or not math.isfinite(args.turn_radius_limit)
@@ -515,10 +609,11 @@ def main():
                 or args.corner_max_turn_deg > 120.0
                 or not math.isfinite(args.crosswalk_stop_seconds)
                 or args.crosswalk_stop_seconds < 0.0):
-            raise SystemExit('초기 주행 한도는 max-linear <= 0.05 m/s, max-angular <= 0.25 rad/s, '
+            raise SystemExit('초기 주행 한도는 max-linear <= 0.10 m/s, max-angular <= 0.60 rad/s, '
                              'steering-gain <= 2.0, '
                              'turn-radius-limit between 0.03 and 0.30 m, '
                              'stop-distance >= 0.20 m, obstacle-min-width between 0.03 and 0.50 m, '
+                             'corner-wall-distance 0 or between stop-distance+0.05 and 0.80 m, '
                              'corner-max-turn-deg between 0 and 120, '
                              'crosswalk-stop-seconds >= 0 입니다.')
 
