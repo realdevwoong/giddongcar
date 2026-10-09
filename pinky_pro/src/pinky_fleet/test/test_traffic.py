@@ -225,3 +225,19 @@ def test_waiting_too_long_drops_the_goal():
     assert g.update(moving, 100) == ([], [])                      # 아직 기다린다
     ready, dropped = g.update(moving, 122)                        # 120초 넘음: 버린다
     assert ready == [] and dropped[0][0] == 'robot2' and g.pending == []
+
+
+def test_traffic_layout_and_state_for_the_web():
+    """웹이 지도에 그릴 통로·양보 거리와, 물러난 횟수를 받는다."""
+    from pinky_fleet.fleet import Fleet
+    from pinky_fleet.traffic import load_zones
+    zones = load_zones(Path(__file__).resolve().parents[1] / 'params' / 'traffic_good3.yaml')
+    fleet = Fleet({}, zones)
+    layout = fleet.traffic_layout()
+    assert (layout['leader'], layout['follower']) == ('robot1', 'robot2')
+    assert set(layout['passages']) == {'door', 'connector'} and layout['passages']['door']['name'] == '문'
+    assert layout['yield_distance'] == zones['yield_distance'] and layout['back_limit'] >= 1
+    fleet.yielding.update(action='back', backs=2)
+    shown = fleet.traffic_state()['yielding']
+    assert (shown['action'], shown['backs'], shown['back_limit']) == ('back', 2, layout['back_limit'])
+    assert Fleet({}).traffic_layout() is None

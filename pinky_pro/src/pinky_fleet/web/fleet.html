@@ -64,17 +64,16 @@ h1 { margin: 0; font-size: 18px; font-weight: 700; white-space: nowrap; }
 .cancel-all { height: 40px; flex-direction: column; gap: 0; line-height: 1.15; font-weight: 700; }
 .cancel-all small { font-size: 11px; font-weight: 400; color: var(--muted); }
 .help-btn { width: 40px; padding: 0; font-size: 16px; font-weight: 700; }
+.hdr-break { display: none; }   /* 폰에서만: 버튼 셋을 다음 줄로 */
 
 /* ───── 본문 격자 (기본 = 앱 모드(폭 1100px·높이 620px 이상)가 아닐 때: 노트북에서 창을 반만 띄울 때 등. 페이지가 스크롤된다) ───── */
 main { flex: 1; min-width: 0; display: grid; gap: 8px; padding: 8px var(--gut) var(--gut);
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  grid-template-rows: auto clamp(320px, 55vh, 560px) auto auto auto;
-  grid-template-areas: "tools tools" "map map" "coords coords" "c1 c2" "log log"; }
+  grid-template-rows: auto clamp(320px, 55vh, 560px) auto auto auto auto;
+  grid-template-areas: "tools tools" "map map" "coords coords" "traffic traffic" "c1 c2" "log log"; }
 
 /* 도구줄: RViz처럼 지도 바로 위. 로봇마다 [상태 칩][초기 위치][목적지] */
 .tools { grid-area: tools; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; min-height: var(--tools); }
-.traffic-status { flex: 1 0 100%; padding: 6px 10px; border: 1px solid #526b8b; border-radius: 8px;
-  background: #1b2b40; color: var(--text); font-size: 13px; }
 .tgroup { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .tsep { width: 1px; height: 28px; margin: 0 4px; background: var(--line); }
 .rchip { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px 0 8px; border-radius: 8px;
@@ -88,6 +87,32 @@ main { flex: 1; min-width: 0; display: grid; gap: 8px; padding: 8px var(--gut) v
 .mapinfo { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--muted); }
 .st-blue { color: #8cc8ff; } .st-green { color: #6fdca0; } .st-red { color: var(--red); }
 .st-amber { color: var(--amber); } .st-grey { color: var(--muted); }
+
+/* ───── 교통 정리 패널: 두 로봇이 같은 길에서 만날 때(교착) 푸는 규칙과 지금 단계 ───── */
+.traffic { grid-area: traffic; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 12px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+.tr-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.tr-title { font-size: 15px; font-weight: 700; }
+.tr-rule { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 13px; }
+.tr-off { padding: 1px 8px; border: 1px solid var(--amber); border-radius: 9px; color: var(--amber); font-size: 12px; }
+.tr-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 0; padding: 0; list-style: none; }
+.tr-steps li { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 7px 8px 8px; border: 1px solid var(--line);
+  border-top: 3px solid var(--line); border-radius: 8px; background: #111a26; color: var(--muted); font-size: 12px; line-height: 1.35; }
+.tr-steps b { display: flex; align-items: baseline; gap: 6px; color: var(--text); font-size: 14px; }
+.tr-steps b small { margin-left: auto; font-size: 12px; font-weight: 700; }
+.tr-steps li.on { color: var(--text); }
+.tr-steps li.on.go { border-color: #2fae6d; background: #11281c; }
+.tr-steps li.on.stop { border-color: var(--amber); background: #2d2410; }
+.tr-steps li.on.back { border-color: #ff8a5c; background: #33190f; }
+.tr-steps li.on.resume { border-color: #3f8fd6; background: #10233a; }
+.traffic.off .tr-steps li { opacity: .55; }
+.tr-reason { margin: 0; min-height: 1.4em; font-size: 14px; }
+.tr-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0; padding: 0; list-style: none; color: var(--muted); font-size: 12px; }
+.tr-legend i { display: inline-block; width: 22px; height: 10px; margin-right: 5px; border-radius: 5px; vertical-align: -1px; }
+.tr-legend .lg-lead { background: rgba(82, 183, 255, .45); }
+.tr-legend .lg-fol { background: rgba(255, 175, 96, .45); }
+.tr-legend .lg-hit { background: rgba(255, 107, 107, .6); }
+.tr-legend .lg-pass { background: repeating-linear-gradient(135deg, rgba(242, 180, 65, .75) 0 3px, rgba(242, 180, 65, .2) 3px 6px); }
 
 /* 지도 */
 .mapbox { grid-area: map; position: relative; min-width: 0; min-height: 0; overflow: hidden;
@@ -240,7 +265,9 @@ dialog dt { font-weight: 700; }
   body { height: 100vh; overflow: hidden; }
   main { min-height: 0; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(300px, .9fr);
     grid-template-rows: var(--tools) minmax(0, 1fr) auto var(--strip);
-    grid-template-areas: "tools tools tools" "map map map" "coords coords coords" "c1 c2 log"; }
+    grid-template-areas: "tools tools tools" "map map traffic" "coords coords traffic" "c1 c2 log"; }
+  main.no-traffic { grid-template-areas: "tools tools tools" "map map map" "coords coords coords" "c1 c2 log"; }
+  .tr-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .tools { flex-wrap: nowrap; }
   .log ol { max-height: calc(var(--strip) - 48px); }
   .log summary { list-style: none; cursor: default; }
@@ -261,19 +288,40 @@ dialog dt { font-weight: 700; }
   .rchip, .tool { height: 36px; }
 }
 @media (min-width: 1500px) and (min-height: 760px) {
-  main { grid-template-columns: minmax(0, 1fr) minmax(280px, 34vw) minmax(260px, 300px);
-    grid-template-rows: var(--tools) minmax(0, 1fr) auto;
-    grid-template-areas: "tools tools tools" "map c1 log" "coords c2 log"; }
+  main { grid-template-columns: minmax(0, 1fr) minmax(300px, 32vw) minmax(260px, 300px);
+    grid-template-rows: var(--tools) auto auto minmax(0, 1fr) auto;
+    grid-template-areas: "tools tools tools" "map c1 log" "map c2 log" "map traffic log" "coords coords log"; }
+  main.no-traffic { grid-template-areas: "tools tools tools" "map c1 log" "map c2 log" "map . log" "coords coords log"; }
+  .tr-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .cam img { height: min(28vh, 300px); }
 }
 @media (min-width: 1100px) and (max-width: 1499px) and (min-height: 760px) {
   .cam img { height: clamp(150px, 24vh, 260px); }
 }
 @media (max-width: 1099px) {
+  .tsep { display: none; }
   .alert { order: 9; flex-basis: 100%; }
   .alert.empty { display: none; }
   .cancel-all { height: 36px; }
   .cancel-all small, .mapinfo { display: none; }
+}
+/* 폰: 한 줄로 쌓고, 도구 버튼은 아이콘만(글자는 화면 읽기용으로 남긴다) */
+@media (max-width: 640px) {
+  :root { --gut: 10px; }
+  h1 { font-size: 16px; }
+  #goAll { margin-left: auto; }
+  main { grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto clamp(220px, 68vw, 420px) auto auto auto auto auto;
+    grid-template-areas: "tools" "map" "coords" "traffic" "c1" "c2" "log"; }
+  .hdr-break { display: block; flex-basis: 100%; height: 0; }
+  .tsep { display: none; }
+  .tgroup { flex: 1 1 100%; }
+  .rchip { flex: 1 1 auto; min-width: 0; }
+  .tool { flex: none; width: 44px; padding: 0; }
+  .tool > span { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .tools-end { flex: 1 1 100%; justify-content: flex-end; }
+  .clegend { margin-left: 0; white-space: normal; }
+  .tr-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
@@ -299,6 +347,7 @@ dialog dt { font-weight: 700; }
     <span class="alert-text" id="alertText"></span><span class="alert-more" id="alertMore"></span>
     <button type="button" class="alert-ack" id="alertAck" title="이 알림을 숨겨요. 로봇에는 아무것도 보내지 않아요.">알림 끄기</button>
   </div>
+  <span class="hdr-break" aria-hidden="true"></span>
   <button type="button" class="btn" id="goAll" aria-disabled="true"
     title="목적지를 찍어 둔 로봇을 한꺼번에 출발시킵니다">▶ 둘 다 출발</button>
   <button type="button" class="btn cancel cancel-all" id="cancelAll" aria-keyshortcuts="Shift+X"
@@ -316,8 +365,23 @@ dialog dt { font-weight: 700; }
       <button type="button" class="btn" id="fitBtn" title="지도 맞춤 (F)" aria-keyshortcuts="F" aria-label="지도 맞춤">
         <svg aria-hidden="true"><use href="#i-fit"/></svg><span>맞춤</span></button>
     </div>
-    <div class="traffic-status" id="trafficStatus" role="status" aria-live="polite" hidden></div>
   </div>
+
+  <section class="traffic" id="trafficBox" aria-label="교통 정리" hidden>
+    <div class="tr-head">
+      <span class="tr-title">교통 정리</span>
+      <span class="tr-rule" id="trafficRule"></span>
+      <span class="tr-off" id="trafficOff" hidden></span>
+    </div>
+    <ol class="tr-steps" id="trafficSteps">
+      <li data-step="go"><b><span aria-hidden="true">▶︎</span> 달림</b><span data-el="text">두 경로가 멀면 각자 간다</span></li>
+      <li data-step="stop"><b><span aria-hidden="true">Ⅱ</span> 기다림</b><span data-el="text"></span></li>
+      <li data-step="back"><b><span aria-hidden="true">↩︎</span> 물러남<small data-el="count"></small></b><span data-el="text"></span></li>
+      <li data-step="resume"><b><span aria-hidden="true">▶︎</span> 다시 출발</b><span data-el="text"></span></li>
+    </ol>
+    <p class="tr-reason" id="trafficStatus" role="status" aria-live="polite"></p>
+    <ul class="tr-legend" id="trafficLegend"></ul>
+  </section>
 
   <section class="mapbox" id="mapBox" aria-label="지도">
     <canvas id="map" role="img" aria-label="두 로봇의 위치와 경로 지도" aria-describedby="mapSummary"></canvas>
@@ -407,6 +471,9 @@ dialog dt { font-weight: 700; }
     <dt>vision_drive</dt><dd>카메라 차선 주행(vision_drive)이 같은 ROS 도메인에서 돌면 카드에 그 영상 창 화면이 떠요.
       시작할 때와 횡단보도에서는 멈춘 채 <b>▶ 출발</b>을 기다려요(주황 띠). <b>■ 정지</b>는 ▶ 출발 전까지 세워요.
       비상 정지가 아니에요. 이 화면은 Nav2 없이 띄운 관제(fleet_dashboard만)에서 쓰세요. Nav2가 돌면 vision_drive가 주행을 거부해요.</dd>
+    <dt>교통 정리</dt><dd>두 로봇이 같은 길에서 만나면(교착) ①이 먼저 가고 ②가 양보해요. 지도의 파란 띠는 ① 앞 경로,
+      주황 띠는 ② 앞 경로예요. 두 띠가 닿으면 ②가 멈추고(빨간 띠·! 표시), ②가 이미 ① 길 위면 조금씩 뒤로 물러나요(화살표).
+      ①이 지나가면 ②는 같은 목적지로 다시 출발해요. 빗금 칸은 한 대씩만 지나가는 좁은 통로예요. 숫자는 칸 파일(traffic_good3.yaml) 값이에요.</dd>
     <dt>알림 끄기</dt><dd>머리줄·카드의 알림만 숨겨요. 로봇에는 아무것도 보내지 않아요.</dd>
     <dt>방향</dt><dd>0° = +x(오른쪽), 반시계 방향이 +.</dd>
   </dl>
@@ -544,6 +611,8 @@ const WHY = {server: '서버 연결 끊김', map: '지도 수신 대기', mismat
 // ─────────────── 상태 ───────────────
 let robots = [];                                    // 마지막 /api/state 의 robots
 let traffic = null;                                 // 교통 정리·재시도 상태
+let trafficLayout = null;   // /api/map의 traffic: 칸·좁은 통로·양보 거리 (교통 정리가 꺼져 있으면 null)
+const trafficSeen = {action: 'go', resumedAt: 0};   // '다시 출발' 단계를 몇 초 보여 주려고 지난 결정을 기억한다
 let map = null, mapId = null, bitmap = null, known = null;   // known: 알려진 칸 범위(칸 단위)
 let mapSource = null;   // 'robot' = map_server의 /map, 'file' = 관제가 지도 YAML을 직접 읽음
 const mapLoad = {busy: false, fails: 0, retryAt: 0, error: ''};   // /api/map 받기 (연결 상태와 따로)
@@ -880,6 +949,8 @@ const INSET = {top: 36, bottom: 28, side: 24};   // 맞춤 여백(px): 위 = 안
 function installMap(data) {
   const first = mapId === null;
   map = data.map; mapId = data.id;
+  trafficLayout = data.traffic || null;
+  guard(buildTrafficPanel);
   if (!map) return;
   bitmap = document.createElement('canvas'); bitmap.width = map.width; bitmap.height = map.height;
   const bctx = bitmap.getContext('2d'), image = bctx.createImageData(map.width, map.height);
@@ -952,7 +1023,7 @@ function draw() {
   ctx.drawImage(bitmap, ox, oy, W, H);
   ctx.strokeStyle = '#45556b'; ctx.lineWidth = 1; ctx.strokeRect(ox - .5, oy - .5, W + 1, H + 1);
   drawGrid();
-  // [자리] 문 구역(교통 제어): 백엔드가 zones를 보내 주면 여기서 그린다. 좌표를 코드에 박지 않는다.
+  drawTraffic();    // 좁은 통로·우선 경로 띠·양보 표시 (백엔드가 보낸 칸 파일 좌표로, 코드에 박지 않는다)
   ctx.save();
   if (conn.state === 'lost') ctx.globalAlpha = .5;     // 서버가 끊기면 마지막 모습을 흐리게 남긴다
   const onMap = robots.filter(r => r.online && r.map_matches)
@@ -968,6 +1039,7 @@ function draw() {
   for (const s of lastSeen) ghostCircle(s.q, s.id);
   const withPose = onMap.filter(r => r.pose);
   for (const r of withPose) drawMarker(r);
+  drawTrafficMarks();
   resetLayout(onMap, lastSeen);
   drawStatusLabels(withPose);          // 라벨 자리는 살아 있는 로봇 → 마지막 위치 → 유령 순서로 잡는다
   drawLastSeenLabels(lastSeen);
@@ -1006,6 +1078,113 @@ function drawPath(r) {   // 어두운 테두리 위에 로봇 색. robot2는 점
   trace(); ctx.strokeStyle = 'rgba(14, 20, 29, .55)'; ctx.lineWidth = 5; ctx.stroke();
   if (r.id === 'robot2') { ctx.setLineDash([8, 5]); ctx.lineCap = 'butt'; }
   trace(); ctx.strokeStyle = COLOR[r.id]; ctx.lineWidth = 3; ctx.stroke();
+  ctx.restore();
+}
+
+// ───── 교통 정리 그림: 좁은 통로(빗금), 우선 경로 띠(앞 순위 로봇 앞쪽), 양보 띠·닿은 곳·물러나는 화살표 ─────
+// 양보 규칙(traffic.py YieldRule)과 같은 길이로 자른다: 두 띠(폭 = 양보 거리)가 닿으면 뒤 순위 로봇이 양보한다
+function pathAhead(pose, path, length) {
+  const out = [{x: pose.x, y: pose.y}];
+  let left = length;
+  for (const p of path || []) {
+    const last = out[out.length - 1], step = Math.hypot(p.x - last.x, p.y - last.y);
+    if (step >= left) {
+      const t = step ? left / step : 0;
+      out.push({x: last.x + t * (p.x - last.x), y: last.y + t * (p.y - last.y)});
+      return out;
+    }
+    out.push({x: p.x, y: p.y});
+    left -= step;
+  }
+  return out;
+}
+function closestOnSegment(p, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y, len = dx * dx + dy * dy;
+  const t = len ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len)) : 0;
+  return {x: a.x + t * dx, y: a.y + t * dy};
+}
+function closestPair(pa, pb) {   // 두 꺾은선에서 가장 가까운 두 점 (꼭짓점 ↔ 선분으로 충분히 가깝다)
+  let best = null;
+  const seg = pts => pts.length > 1 ? pts.slice(1).map((q, i) => [pts[i], q]) : [[pts[0], pts[0]]];
+  for (const [a, b] of seg(pb)) for (const p of pa) {
+    const q = closestOnSegment(p, a, b), d = Math.hypot(p.x - q.x, p.y - q.y);
+    if (!best || d < best.d) best = {d, a: p, b: q};
+  }
+  for (const [a, b] of seg(pa)) for (const p of pb) {
+    const q = closestOnSegment(p, a, b), d = Math.hypot(p.x - q.x, p.y - q.y);
+    if (!best || d < best.d) best = {d, a: q, b: p};
+  }
+  return best;
+}
+function drawTraffic() {
+  const L = trafficLayout;
+  if (!L) return;
+  const px = m => m / map.resolution * scale;
+  ctx.save();
+  // 좁은 통로: 한 대씩만 지나가는 곳
+  ctx.font = `700 12px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const passage of Object.values(L.passages || {})) {
+    const pts = passage.polygon.map(([x, y]) => worldToScreen({x, y}));
+    const outline = () => { ctx.beginPath(); pts.forEach((q, i) => i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y)); ctx.closePath(); };
+    outline(); ctx.fillStyle = 'rgba(242, 180, 65, .18)'; ctx.fill();
+    ctx.save(); ctx.clip();
+    ctx.strokeStyle = 'rgba(242, 180, 65, .55)'; ctx.lineWidth = 2;
+    const xs = pts.map(q => q.x), ys = pts.map(q => q.y), x0 = Math.min(...xs), y0 = Math.min(...ys);
+    const w = Math.max(...xs) - x0, h = Math.max(...ys) - y0;
+    ctx.beginPath();
+    for (let k = -h; k < w; k += 7) { ctx.moveTo(x0 + k, y0 + h); ctx.lineTo(x0 + k + h, y0); }
+    ctx.stroke(); ctx.restore();
+    outline(); ctx.strokeStyle = 'rgba(242, 180, 65, .9)'; ctx.lineWidth = 1.5; ctx.stroke();
+    const cx = xs.reduce((a, b) => a + b, 0) / xs.length, cy = Math.min(...ys) - 9;
+    ctx.fillStyle = 'rgba(14, 20, 29, .85)'; const tw = ctx.measureText(passage.name).width + 10;
+    roundRect(cx - tw / 2, cy - 9, tw, 18, 9); ctx.fill();
+    ctx.fillStyle = '#f2b441'; ctx.fillText(passage.name, cx, cy + .5);
+  }
+  const t = traffic || {}, y = t.yielding || {};
+  const lead = robot(L.leader), fol = robot(L.follower);
+  const live = r => r && r.online && r.map_matches && r.pose;
+  if (!t.enabled || !live(lead) || !live(fol)) { ctx.restore(); return; }
+  const band = (pts, color) => {
+    if (!pts || pts.length < 2) return;
+    const q = pts.map(worldToScreen);
+    ctx.beginPath(); q.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.strokeStyle = color; ctx.lineWidth = Math.max(6, px(L.yield_distance));
+    ctx.stroke();
+  };
+  const yielding = y.action === 'stop' || y.action === 'back';
+  const leadAhead = lead.nav && lead.nav.active ? pathAhead(lead.pose, lead.path, L.yield_leader_ahead) : null;
+  const folAhead = pathAhead(fol.pose, fol.path, L.yield_lookahead);
+  band(leadAhead, 'rgba(82, 183, 255, .38)');
+  band(folAhead, yielding ? 'rgba(255, 107, 107, .42)' : 'rgba(255, 175, 96, .36)');
+  if (y.action === 'back') {   // 물러나는 방향(로봇 뒤쪽)과 횟수
+    const back = {x: fol.pose.x - Math.cos(fol.pose.yaw) * L.back_step * 1.6, y: fol.pose.y - Math.sin(fol.pose.yaw) * L.back_step * 1.6};
+    const a = worldToScreen(fol.pose), b = worldToScreen(back), ang = Math.atan2(b.y - a.y, b.x - a.x);
+    const from = {x: a.x + Math.cos(ang) * (MARKER_R + 3), y: a.y + Math.sin(ang) * (MARKER_R + 3)};
+    arrow(from, b, '#ff8a5c');
+    if (y.backs) {
+      ctx.font = `800 11px ${FONT}`; const label = `물러남 ${y.backs}/${y.back_limit || L.back_limit}`;
+      const tw = ctx.measureText(label).width + 12;
+      ctx.fillStyle = 'rgba(14, 20, 29, .9)'; roundRect(b.x - tw / 2, b.y + 8, tw, 18, 9); ctx.fill();
+      ctx.fillStyle = '#ff8a5c'; ctx.fillText(label, b.x, b.y + 17.5);
+    }
+  }
+  ctx.restore();
+}
+// 띠가 닿은 곳(! 표시): 로봇 표시 위에 그린다. 물러날 때는 화살표가 이미 말해 준다
+function drawTrafficMarks() {
+  const L = trafficLayout, t = traffic || {}, y = t.yielding || {};
+  if (!L || !t.enabled || y.action !== 'stop') return;
+  const lead = robot(L.leader), fol = robot(L.follower);
+  const live = r => r && r.online && r.map_matches && r.pose;
+  if (!live(lead) || !live(fol) || !(lead.nav && lead.nav.active)) return;
+  const hit = closestPair(pathAhead(fol.pose, fol.path, L.yield_lookahead), pathAhead(lead.pose, lead.path, L.yield_leader_ahead));
+  if (!hit) return;
+  const q = worldToScreen({x: (hit.a.x + hit.b.x) / 2, y: (hit.a.y + hit.b.y) / 2});
+  ctx.save();
+  ctx.beginPath(); ctx.arc(q.x, q.y, 11, 0, TAU); ctx.fillStyle = 'rgba(217, 45, 67, .95)'; ctx.fill();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.fillStyle = '#fff'; ctx.font = `800 13px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('!', q.x, q.y + .5);
   ctx.restore();
 }
 
@@ -1658,22 +1837,60 @@ function render() {
   renderSummary();
 }
 let trafficNote = '', trafficNoteChangedAt = 0;
+// 교통 정리 패널: 규칙(누가 먼저)과 4단계 중 지금 단계. 숫자는 칸 파일(traffic_good3.yaml) 값
+function buildTrafficPanel() {
+  const L = trafficLayout, steps = $('#trafficSteps');
+  if (!L) return;
+  const lead = CIRCLED[L.leader] || '①', fol = CIRCLED[L.follower] || '②', m = v => `${Number(v).toFixed(2)} m`;
+  $('#trafficRule').replaceChildren(...makeDisc(L.leader), document.createTextNode(' 먼저 · '),
+    ...makeDisc(L.follower), document.createTextNode(' 양보'));
+  const text = {
+    stop: `${fol} 앞 ${m(L.yield_lookahead)} 경로가 ${lead} 앞 ${m(L.yield_leader_ahead)} 경로와 ${m(L.yield_distance)} 안으로 가까워지면 ${fol}가 멈춘다`,
+    back: `${fol}가 이미 ${lead} 경로 위면 ${m(L.back_step)}씩 뒤로 비킨다 (최대 ${L.back_limit}번)`,
+    resume: `${lead}가 지나가면 ${fol}가 같은 목적지로 다시 출발한다`,
+  };
+  for (const li of steps.children) {
+    const t = text[li.dataset.step];
+    if (t) setText(li.querySelector('[data-el="text"]'), t);
+  }
+  const legend = [['lg-lead', `${lead} 우선 경로 띠`], ['lg-fol', `${fol} 앞 경로 띠`], ['lg-hit', '띠가 닿음 = 양보'],
+    ['lg-pass', '좁은 통로(한 대씩)']];
+  $('#trafficLegend').replaceChildren(...legend.map(([cls, label]) => {
+    const li = document.createElement('li'), i = document.createElement('i');
+    i.className = cls; i.setAttribute('aria-hidden', 'true'); li.append(i, label); return li;
+  }));
+}
 function renderTraffic() {
-  const el = $('#trafficStatus'), y = traffic && traffic.yielding, messages = [];
-  if (y && y.action !== 'go') {
-    messages.push(`${y.robot || 'robot2'} 양보 중${y.leader ? ` (${y.leader} 먼저)` : ''}`);
-    if (y.reason) messages.push(y.reason);
+  const box = $('#trafficBox'), L = trafficLayout, t = traffic || {}, y = t.yielding || {};
+  const shown = !!L;
+  show(box, shown);
+  $('#main').classList.toggle('no-traffic', !shown);
+  if (!shown) return;
+  const on = !!t.enabled, live = id => { const r = robot(id); return !!(r && r.online && r.pose); };
+  const both = live(L.leader) && live(L.follower);
+  const action = on && (both || (y.action && y.action !== 'go')) ? (y.action || 'go') : null;
+  if (action === 'go' && trafficSeen.action && trafficSeen.action !== 'go') trafficSeen.resumedAt = Date.now();
+  if (action) trafficSeen.action = action;
+  const resumed = action === 'go' && Date.now() - trafficSeen.resumedAt < 6000;
+  const step = !on ? null : resumed ? 'resume' : action;
+  box.classList.toggle('off', !on);
+  show($('#trafficOff'), !on);
+  setText($('#trafficOff'), t.off ? `꺼짐 · ${t.off}` : '꺼짐');
+  for (const li of $('#trafficSteps').children) {
+    const here = li.dataset.step === step;
+    setClass(li, here ? `on ${step}` : '');
+    setAttr(li, 'aria-current', here ? 'step' : null);
   }
-  const note = traffic && traffic.note || '';
-  if (note !== trafficNote) {
-    trafficNote = note;
-    trafficNoteChangedAt = Date.now();
-  }
-  // 마지막 알림을 서버가 보관해도 도구 줄을 계속 차지하지 않도록 잠시만 표시한다.
-  if (note && Date.now() - trafficNoteChangedAt < 5000) messages.push(note);
-  const text = [...new Set(messages)].join(' · ');
-  setText(el, text);
-  show(el, !!text);
+  const count = $('#trafficSteps [data-step="back"] [data-el="count"]');
+  setText(count, action === 'back' && y.backs ? `${y.backs}/${y.back_limit || L.back_limit}` : '');
+  const note = t.note || '';
+  if (note !== trafficNote) { trafficNote = note; trafficNoteChangedAt = Date.now(); }
+  const fresh = note && Date.now() - trafficNoteChangedAt < 5000 ? note : '';
+  const say = !on ? '교통 정리가 꺼져 있어 두 로봇이 서로 양보하지 않아요'
+    : !action ? '두 로봇의 위치가 지도에 잡히면 이 규칙으로 양보해요'
+    : action === 'stop' || action === 'back' ? (y.reason || `${y.robot || L.follower} 양보 중`)
+    : resumed ? `${L.leader}가 지나가서 ${L.follower}가 다시 출발했어요` : '경로가 겹치지 않아 둘 다 달려요';
+  setText($('#trafficStatus'), [say, fresh].filter((v, i, a) => v && a.indexOf(v) === i).join(' · '));
 }
 function renderHeader() {
   const c = conn.state, age = (Date.now() - conn.lastOk) / 1000, el = $('#conn');

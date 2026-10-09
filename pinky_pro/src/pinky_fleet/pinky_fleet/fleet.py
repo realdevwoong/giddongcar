@@ -76,8 +76,20 @@ class Fleet:
             return dict(enabled=False, off=self.traffic_off)
         # 잠그지 않고 읽는다: 교통 스레드가 멈추기·물러나기 명령(최대 4초)을 하는 동안에도 화면 갱신이 막히지 않게
         y = self.yielding
-        shown = dict(robot=FOLLOWER, leader=LEADER, action=y['action'], reason=y['reason'], target=y['target'])
+        shown = dict(robot=FOLLOWER, leader=LEADER, action=y['action'], reason=y['reason'], target=y['target'],
+                     backs=y['backs'], back_limit=BACK_LIMIT)
         return dict(enabled=self.traffic_off is None, off=self.traffic_off, note=self.traffic_note, yielding=shown)
+
+    def traffic_layout(self):
+        """화면에 그릴 교통 정리 모양: 칸·좁은 통로와 양보 거리. 꺼져 있으면 None(지도와 함께 한 번만 보낸다)."""
+        if not self.gate:
+            return None
+        polygons = lambda table: {name: dict(name=item.get('name', name), polygon=item['polygon'])
+                                  for name, item in table.items()}
+        return dict(leader=LEADER, follower=FOLLOWER, cells=polygons(self.gate.cells),
+                    passages=polygons(self.gate.passages), yield_distance=self.rule.distance,
+                    yield_lookahead=self.rule.lookahead, yield_leader_ahead=self.rule.leader_ahead,
+                    back_step=BACK_STEP, back_limit=BACK_LIMIT)
 
     def command(self, robot_id, action, body):
         if robot_id not in self.robots:

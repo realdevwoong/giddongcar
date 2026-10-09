@@ -67,7 +67,7 @@ def handler_for(fleet):
                 self.send(200, fleet.state())
             elif route == '/api/map':
                 map_id, data = fleet.map()
-                self.send(200, dict(id=map_id, map=data))
+                self.send(200, dict(id=map_id, map=data, traffic=fleet.traffic_layout()))
             else:
                 self.send(404, dict(error='Not found'))
 
