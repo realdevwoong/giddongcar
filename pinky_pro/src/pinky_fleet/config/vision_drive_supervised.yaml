@@ -14,4 +14,4 @@ steering_gain: 1.2
 turn_radius_limit: 0.08
 stop_distance: 0.35
 obstacle_min_width: 0.12
-lane_recovery_seconds: 0.6
+corner_max_turn_deg: 100.0

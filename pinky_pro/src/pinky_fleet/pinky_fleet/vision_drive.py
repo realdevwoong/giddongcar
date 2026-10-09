@@ -72,8 +72,9 @@ def parse_args(argv=None):
                         help='라이다 전방 정지 거리 m (제동 시험 전 보수적 초기값)')
     parser.add_argument('--obstacle-min-width', type=float, default=0.12,
                         help='정지 장애물로 볼 LiDAR 물체의 최소 가로 폭 m')
-    parser.add_argument('--lane-recovery-seconds', type=float, default=0.6,
-                        help='주행 영역이 잠깐 사라졌을 때 마지막 조향 방향으로 제자리 재탐색할 최대 시간')
+    parser.add_argument('--corner-max-turn-deg', type=float, default=100.0,
+                        help='코너에서 차선을 잃었을 때 한쪽으로 제자리 회전할 최대 각도(도). '
+                             '예상 방향으로 먼저 돌고, 못 찾으면 반대쪽으로 같은 각도까지 돈다. 0이면 회전 안 함')
     parser.add_argument('--headless', action='store_true', help='OpenCV 영상 창을 띄우지 않음')
     parser.add_argument('--output-dir', default='~/vision_drive_observations',
                         help='관찰 모드에서 프레임/결과를 저장할 디렉터리')
@@ -330,6 +331,65 @@ def _detections(result):
     return output
 
 
+CORNER_REASON = '코너 제자리 회전'
+
+
+def _corner_direction(history, window=1.0):
+    """Guess the turn from lane errors just before the lane disappeared.
+
+    +1 turns left (counter-clockwise), -1 right. A positive error means the
+    path ahead leaned right. In recorded 90-degree corners this matched the
+    real turn 6 times out of 8, so _corner_pivot also searches the other side.
+    """
+    if not history:
+        return 1
+    last_at = history[-1][0]
+    recent = [error for at, error in history if last_at - at <= window]
+    return -1 if sum(recent) / len(recent) > 0 else 1
+
+
+def _corner_pivot(node, args, now):
+    """Bounded in-place search after the lane disappears, e.g. at a 90-degree corner.
+
+    Turn toward the guessed side up to corner_max_turn_deg, then sweep back to the
+    same angle on the other side, then stop. Never moves forward, and the heading
+    stays within +/- corner_max_turn_deg of where the lane was lost.
+    """
+    corner = getattr(node, 'corner', None)
+    if corner is None:
+        corner = node.corner = dict(first=_corner_direction(getattr(node, 'lane_error_history', [])),
+                                    started_at=now)
+    rate = args.max_angular
+    if rate <= 0.0:
+        return 0.0, 0.0, '주행 영역 불명확: 정지'
+    sweep = math.radians(args.corner_max_turn_deg) / rate
+    elapsed = now - corner['started_at']
+    if elapsed < sweep:
+        direction, phase = corner['first'], '예상 방향'
+    elif elapsed < 3.0 * sweep:
+        direction, phase = -corner['first'], '반대쪽'
+    else:
+        return 0.0, 0.0, '코너에서 차선을 못 찾음: 정지'
+    corner['direction'] = direction
+    side = '왼쪽' if direction > 0 else '오른쪽'
+    return 0.0, direction * rate, f'{CORNER_REASON}: {side} ({phase})'
+
+
+def _drive_guard(command, front, stop_distance):
+    """Last check before publishing a drive command.
+
+    No lidar stops everything. An obstacle within stop_distance blocks forward
+    motion, but a corner pivot in place may continue: at a corner the course wall
+    is often that close while the robot only needs to turn.
+    """
+    linear, angular, reason = command
+    if front is None:
+        return 0.0, 0.0, '라이다 입력 없음/지연: 정지'
+    if front <= stop_distance and not (linear == 0.0 and reason.startswith(CORNER_REASON)):
+        return 0.0, 0.0, f'전방 장애물 {front:.2f} m: 정지'
+    return command
+
+
 def _policy(node, mask, detections, args, inference_at, camera_at):
     """Fail closed when perception or robot sensor data is unavailable/stale."""
     height, width = mask.shape if mask is not None else (0, 0)
@@ -355,25 +415,14 @@ def _policy(node, mask, detections, args, inference_at, camera_at):
     if time.monotonic() - inference_at > 0.5 or camera_at is None or camera_at > 0.5:
         return 0.0, 0.0, '카메라/인식 지연: 정지'
     error = _lane_error(mask)
-    if error is None:
-        recovery_started = getattr(node, 'lane_recovery_started_at', None)
-        if recovery_started is None:
-            node.lane_recovery_started_at = time.monotonic()
-            recovery_started = node.lane_recovery_started_at
-        last_error = getattr(node, 'last_lane_error', None)
-        elapsed = time.monotonic() - recovery_started
-        if (last_error is not None and abs(last_error) >= 0.06
-                and elapsed < args.lane_recovery_seconds):
-            # Turn in place toward the last visible path estimate, for a short
-            # bounded interval. Never reverse or creep forward with no lane.
-            recovery_rate = min(args.max_angular, 0.15)
-            gain = args.steering_gain
-            angular = max(-recovery_rate, min(recovery_rate, -gain * last_error))
-            return 0.0, angular, '주행 영역 불명확: 방향 한정 재탐색'
-        return 0.0, 0.0, '주행 영역 불명확: 정지'
-    node.last_lane_error = error
-    node.last_lane_valid_at = time.monotonic()
-    node.lane_recovery_started_at = None
+    corner = getattr(node, 'corner', None)
+    # Keep pivoting while the lane re-enters from the turning side but is not yet ahead.
+    if error is None or (corner is not None and abs(error) > 0.5 and error * corner['direction'] < 0):
+        return _corner_pivot(node, args, now)
+    node.corner = None
+    history = getattr(node, 'lane_error_history', [])
+    history.append((now, error))
+    node.lane_error_history = [item for item in history if now - item[0] <= 2.0]
     front = node.front_range(min_width=args.obstacle_min_width)
     if args.mode == 'drive' and front is None:
         return 0.0, 0.0, '라이다 입력 없음/지연: 정지'
@@ -452,16 +501,16 @@ def main():
                 or args.stop_distance < 0.20
                 or not math.isfinite(args.obstacle_min_width)
                 or args.obstacle_min_width < 0.03 or args.obstacle_min_width > 0.50
-                or not math.isfinite(args.lane_recovery_seconds)
-                or args.lane_recovery_seconds < 0.0
-                or args.lane_recovery_seconds > 0.8
+                or not math.isfinite(args.corner_max_turn_deg)
+                or args.corner_max_turn_deg < 0.0
+                or args.corner_max_turn_deg > 120.0
                 or not math.isfinite(args.crosswalk_stop_seconds)
                 or args.crosswalk_stop_seconds < 0.0):
             raise SystemExit('초기 주행 한도는 max-linear <= 0.05 m/s, max-angular <= 0.25 rad/s, '
                              'steering-gain <= 2.0, '
                              'turn-radius-limit between 0.03 and 0.30 m, '
                              'stop-distance >= 0.20 m, obstacle-min-width between 0.03 and 0.50 m, '
-                             'lane-recovery-seconds <= 0.8 s, '
+                             'corner-max-turn-deg between 0 and 120, '
                              'crosswalk-stop-seconds >= 0 입니다.')
 
     try:
@@ -572,9 +621,9 @@ def main():
                 linear, angular, reason = current_command
                 if time.monotonic() - inference_at > 0.5 or camera_age is None or camera_age > 0.5:
                     linear, angular, reason = 0.0, 0.0, '카메라/인식 지연: 정지'
-                front = node.front_range(min_width=args.obstacle_min_width)
-                if front is None or (front is not None and front <= args.stop_distance):
-                    linear, angular, reason = 0.0, 0.0, '라이다 입력/전방 장애물: 정지'
+                linear, angular, reason = _drive_guard(
+                    (linear, angular, reason), node.front_range(min_width=args.obstacle_min_width),
+                    args.stop_distance)
                 if node.external_cmd_vel_publishers():
                     linear, angular, reason = 0.0, 0.0, '다른 cmd_vel 발행자: 정지'
                 command = Twist()
