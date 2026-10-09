@@ -193,6 +193,16 @@ class VisionDriveNode(Node):
             return False
         return sum(beam <= distance for beam in beams) / len(beams) >= 0.75
 
+    def front_clear(self, half_angle=math.radians(10.0)):
+        """Median free range in a narrow cone straight ahead, or None without a fresh scan.
+
+        Used to tell "facing down the next corridor" from "still facing the corner".
+        """
+        beams = self._beams(half_angle)
+        if not beams:
+            return None
+        return float(np.median(beams))
+
     def side_clearance(self, half_angle=math.radians(40.0)):
         """(left, right) median free range around +/-90 degrees, or None."""
         left = self._beams(half_angle, math.radians(90.0))
@@ -401,16 +411,16 @@ def _corner_pick(node):
     clearance = node.side_clearance()
     if clearance:
         left, right = clearance
-        if left >= right * 1.3 and left - right >= 0.15:
+        if left >= right * 1.25 and left - right >= 0.05:
             return 1, f'라이다 좌 {left:.2f} m > 우 {right:.2f} m'
-        if right >= left * 1.3 and right - left >= 0.15:
+        if right >= left * 1.25 and right - left >= 0.05:
             return -1, f'라이다 우 {right:.2f} m > 좌 {left:.2f} m'
     direction = _corner_direction(getattr(node, 'lane_error_history', []))
     detail = f' (라이다 좌 {clearance[0]:.2f} 우 {clearance[1]:.2f} 비슷)' if clearance else ' (라이다 없음)'
     return direction, '카메라 직전 조향' + detail
 
 
-def _corner_pivot(node, args, now):
+def _corner_pivot(node, args, now, trigger='차선 소실'):
     """Bounded in-place search at a corner.
 
     Turn toward the chosen side up to corner_max_turn_deg, then sweep back to the
@@ -420,8 +430,8 @@ def _corner_pivot(node, args, now):
     corner = getattr(node, 'corner', None)
     if corner is None:
         first, basis = _corner_pick(node)
-        corner = node.corner = dict(first=first, direction=first, started_at=now, failed=False)
-        LOGGER.info('코너 진입: %s으로 회전 (%s)', '왼쪽' if first > 0 else '오른쪽', basis)
+        corner = node.corner = dict(first=first, direction=first, started_at=now, failed=False, overshoot=0)
+        LOGGER.info('코너 진입(%s): %s으로 회전 (%s)', trigger, '왼쪽' if first > 0 else '오른쪽', basis)
     rate = args.max_angular
     if rate <= 0.0 or args.corner_max_turn_deg <= 0.0:
         return 0.0, 0.0, '주행 영역 불명확: 정지'
@@ -453,9 +463,18 @@ def _corner_keeps_turning(node, args, corner, error):
         return True
     if corner['failed']:
         return abs(error) > 0.25            # only a lane ahead ends a failed search
-    if abs(error) > 0.25:
-        return error * corner['direction'] < 0   # still entering from the turning side
-    return node.wall_ahead(args.corner_wall_distance)
+    if abs(error) > 0.25 and error * corner['direction'] > 0:
+        # Lane firmly on the far side for several frames: we overshot, steering takes over.
+        corner['overshoot'] += 1
+        return corner['overshoot'] < 3
+    corner['overshoot'] = 0
+    if abs(error) > 0.5:
+        return True                         # still entering from the turning side
+    # At a corner the floor looks wide and centred long before the robot faces the
+    # next corridor (exited after ~20 degrees on 2026-10-09 and cut the corner).
+    # Only a clear narrow cone ahead proves the turn is done.
+    clear = node.front_clear()
+    return clear is None or clear < 2.0 * max(args.corner_wall_distance, args.stop_distance)
 
 
 def _drive_guard(command, front, stop_distance):
@@ -516,7 +535,7 @@ def _policy(node, mask, detections, args, inference_at, camera_at):
     if (args.corner_wall_distance > 0.0 and abs(error) <= 0.25
             and now >= getattr(node, 'corner_blocked_until', 0.0)
             and node.wall_ahead(args.corner_wall_distance)):
-        return _corner_pivot(node, args, now)
+        return _corner_pivot(node, args, now, trigger=f'정면 벽 {front:.2f} m')
     if front is not None and front <= args.stop_distance:
         return 0.0, 0.0, f'전방 장애물 {front:.2f} m: 정지'
 
@@ -554,8 +573,11 @@ def _policy(node, mask, detections, args, inference_at, camera_at):
         linear = linear * (1.0 - turn_blend) + curve_speed_limit * turn_blend
         turn_limited = True
     obstacle_limited = False
-    if front is not None and front < args.stop_distance + 0.25:
-        linear *= max(0.0, (front - args.stop_distance) / 0.25)
+    # Slow only between the corner-trigger distance and the stop distance. A 0.25 m
+    # band made the robot crawl for ~10 s in front of every corner wall.
+    slow_band = max(0.10, args.corner_wall_distance - args.stop_distance)
+    if front is not None and front < args.stop_distance + slow_band:
+        linear *= max(0.0, (front - args.stop_distance) / slow_band)
         obstacle_limited = True
     if slow_crosswalk:
         reason = '횡단보도 감속'

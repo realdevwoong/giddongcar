@@ -121,3 +121,9 @@ def test_pinky_side_clearance_left_and_right():
     left, right = VisionDriveNode.side_clearance(_node(ranges, **PINKY))
     assert left == pytest.approx(2.0) and right == pytest.approx(0.3)
     assert VisionDriveNode.side_clearance(_node(ranges, scan_yaw=None)) is None
+
+
+def test_pinky_front_clear_cone():
+    assert VisionDriveNode.front_clear(_node([math.inf] * 360, **PINKY)) == pytest.approx(8.0)   # 반환 없음 = range_max
+    assert VisionDriveNode.front_clear(_node(_ranges_with(list(range(-10, 11)), 0.40), **PINKY)) == pytest.approx(0.40)
+    assert VisionDriveNode.front_clear(_node([math.inf] * 360, scan_yaw=None)) is None
