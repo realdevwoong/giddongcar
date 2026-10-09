@@ -217,6 +217,19 @@ def _mask_for_class(result, class_name, image_shape):
     return combined if found else None
 
 
+def _lane_mask(result, args, image_shape):
+    """Road surface used for steering: driveable area plus crosswalk.
+
+    Segmentation training assigns overlapping pixels to the smaller crosswalk
+    instance, so the driveable mask has a gap exactly where the robot crosses.
+    """
+    lane = _mask_for_class(result, args.driveable_class, image_shape)
+    crosswalk = _mask_for_class(result, args.crosswalk_class, image_shape)
+    if crosswalk is None:
+        return lane
+    return crosswalk if lane is None else lane | crosswalk
+
+
 def _lane_error(mask):
     """Estimate steering from several lookahead rows to anticipate bends."""
     if mask is None:
@@ -479,7 +492,7 @@ def main():
                 inference_started = time.monotonic()
                 results = model.predict(frame, device=device, verbose=False, conf=0.35, imgsz=320)
                 result = results[0]
-                mask = _mask_for_class(result, args.driveable_class, frame.shape)
+                mask = _lane_mask(result, args, frame.shape)
                 detections = _detections(result)
                 inference_at = time.monotonic()
                 last_latency_ms = (inference_at - inference_started) * 1000.0
