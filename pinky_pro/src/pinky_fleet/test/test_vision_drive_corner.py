@@ -152,11 +152,42 @@ def test_odom_stuck_robot_still_gives_up_by_time(drive):
 
 def test_pivot_exits_after_persistent_overshoot(drive):
     drive(-0.1)
-    drive(None, clear=0.5)                                # 왼쪽 회전
-    assert drive(0.4, clear=0.5)[2].startswith(vd.CORNER_REASON)   # 한두 프레임 튄 값은 무시
-    assert drive(0.4, clear=0.5)[2].startswith(vd.CORNER_REASON)
-    linear, angular, reason = drive(0.4, clear=0.5)      # 3프레임 연속 반대쪽 → 조향에 맡김
+    drive(None)                                           # 정면이 트인 채 차선만 잃음: 왼쪽 회전
+    assert drive(0.4)[2].startswith(vd.CORNER_REASON)     # 한두 프레임 튄 값은 무시
+    assert drive(0.4)[2].startswith(vd.CORNER_REASON)
+    linear, angular, reason = drive(0.4)                  # 3프레임 연속 반대쪽 → 조향에 맡김
     assert not reason.startswith(vd.CORNER_REASON) and angular < 0.0
+
+
+def test_closed_front_lane_lost_corner_also_turns_min_angle(drive):
+    # 실물 18:39: 코너는 모두 '차선 소실'로 시작했다. 정면이 막혔으면 벽 코너와 같이 최소 60°
+    drive(-0.1, heading=0.0)
+    drive(None, clear=0.5, heading=0.0)
+    for degrees in (15, 25, 40):                          # 반대쪽에 차선이 보여도(25° 종료 사례) 아직 돈다
+        assert drive(0.4, clear=2.0, heading=math.radians(degrees))[2].startswith(vd.CORNER_REASON)
+    assert drive(-0.4, clear=2.0, heading=math.radians(50))[2].startswith(vd.CORNER_REASON)
+    linear, _, _ = drive(-0.1, clear=2.0, heading=math.radians(65))
+    assert linear > 0.0 and drive.node.corner is None
+
+
+def test_closed_corner_turns_to_lidar_corridor_heading(drive):
+    # 실물 18:39:13: 40°에서 차선이 왼쪽(-0.40)에 보이고 정면 1.10 m라 끝내고 대각선으로 갔다
+    drive.node.open_heading = lambda side, reach: side * math.radians(85.0)
+    drive(0.0, heading=0.0)
+    drive(None, clear=0.6, heading=0.0)                   # 정면 막힘 + 차선 소실 → 목표 85°
+    assert drive.node.corner['target'] == pytest.approx(math.radians(85.0))
+    for degrees in (40, 60, 70):
+        assert drive(-0.4, clear=1.1, heading=math.radians(degrees))[2].startswith(vd.CORNER_REASON)
+    linear, angular, _ = drive(-0.4, clear=1.1, heading=math.radians(77))   # 목표 -10° 안: 차선이 대략 앞이면 출발
+    assert linear > 0.0 and angular > 0.0 and drive.node.corner is None
+
+
+def test_corridor_side_wins_when_side_clearances_are_close(drive):
+    drive.node.open_heading = lambda side, reach: None if side > 0 else -math.radians(80.0)
+    for _ in range(3):
+        drive(-0.05)                                       # 카메라는 왼쪽으로 기울었지만
+    _, angular, reason = drive(None, clear=0.6, sides=(0.42, 0.35))
+    assert angular < 0.0 and '오른쪽' in reason            # 오른쪽만 복도로 트임
 
 
 def test_slowdown_band_starts_at_corner_distance(drive):
@@ -195,3 +226,47 @@ def test_odom_heading_unwraps_and_expires(monkeypatch):
     assert math.degrees(vd.VisionDriveNode.heading(node)) == pytest.approx(190.0)
     clock.now += 0.6
     assert vd.VisionDriveNode.heading(node) is None                 # 0.5초 넘게 끊기면 쓰지 않는다
+
+
+# ---- 라이다 스캔 합성: 코너 모양 벽에서 360° 레이저 ----
+
+def _ray_scan(walls, x, y, step=math.radians(1.0)):
+    """로봇 (x, y), 정면 +x에서 벽 선분들까지의 거리. Pinky와 같은 -pi..pi 배열."""
+    ranges = []
+    for index in range(int(round(2 * math.pi / step))):
+        angle = -math.pi + index * step
+        dx, dy = math.cos(angle), math.sin(angle)
+        best = math.inf
+        for (ax, ay), (bx, by) in walls:
+            ex, ey = bx - ax, by - ay
+            denom = dx * ey - dy * ex
+            if abs(denom) < 1e-12:
+                continue
+            t = ((ax - x) * ey - (ay - y) * ex) / denom
+            u = ((ax - x) * dy - (ay - y) * dx) / denom
+            if t > 0 and 0 <= u <= 1:
+                best = min(best, t)
+        ranges.append(best)
+    scan = SimpleNamespace(ranges=ranges, angle_min=-math.pi, angle_increment=step, range_min=0.05, range_max=8.0)
+    node = SimpleNamespace(scan=scan, scan_at=vd.time.monotonic(), scan_yaw=0.0)
+    node._beams = lambda *a, **k: vd.VisionDriveNode._beams(node, *a, **k)
+    return node
+
+
+# 폭 0.8 m 복도가 +x로 오다가 왼쪽(+y)으로 꺾인다. 정면 벽 x=2.0
+LEFT_TURN = [((-3.0, -0.4), (2.0, -0.4)), ((2.0, -0.4), (2.0, 3.0)), ((-3.0, 0.4), (1.2, 0.4)),
+             ((1.2, 0.4), (1.2, 3.0)), ((1.2, 3.0), (2.0, 3.0))]
+
+
+@pytest.mark.parametrize('x, y', [(1.4, 0.0), (1.6, 0.0), (1.3, -0.15)])
+def test_open_heading_points_into_the_next_corridor(x, y):
+    node = _ray_scan(LEFT_TURN, x, y)
+    left = vd.VisionDriveNode.open_heading(node, 1, 0.9)
+    assert left is not None and 60.0 <= math.degrees(left) <= 100.0
+    assert vd.VisionDriveNode.open_heading(node, -1, 0.9) is None      # 오른쪽은 벽
+
+
+def test_open_heading_needs_a_fresh_scan():
+    node = _ray_scan(LEFT_TURN, 1.4, 0.0)
+    node.scan_at -= 1.0
+    assert vd.VisionDriveNode.open_heading(node, 1, 0.9) is None

@@ -270,6 +270,31 @@ class VisionDriveNode(Node):
             return None
         return float(np.median(beams))
 
+    def open_heading(self, side, reach):
+        """Bearing (rad, + = left) of the next corridor on one side, or None if closed.
+
+        Looks 20..150 degrees to `side` in 5-degree steps (median over +-6 degrees)
+        and returns the middle of the widest run of directions free beyond `reach`.
+        The single farthest ray would point at a far corner instead of along the corridor.
+        """
+        runs, run = [], []
+        for degrees in range(20, 151, 5):
+            beams = self._beams(math.radians(6.0), side * math.radians(degrees))
+            if beams is None:
+                return None
+            if beams and float(np.median(beams)) >= reach:
+                run.append(degrees)
+                continue
+            if run:
+                runs.append(run)
+                run = []
+        if run:
+            runs.append(run)
+        if not runs:
+            return None
+        widest = max(runs, key=len)
+        return side * math.radians((widest[0] + widest[-1]) / 2.0)
+
     def side_clearance(self, half_angle=math.radians(40.0)):
         """(left, right) median free range around +/-90 degrees, or None."""
         left = self._beams(half_angle, math.radians(90.0))
@@ -558,13 +583,25 @@ def _corner_direction(history, window=1.0):
     return -1 if sum(recent) / len(recent) > 0 else 1
 
 
-def _corner_pick(node):
-    """Choose the pivot side: lidar clearance first, camera lean as the fallback.
+def _corner_reach(args):
+    """Free range that counts as an open corridor (and as 'not facing the corner wall')."""
+    return 2.0 * max(args.corner_wall_distance, args.stop_distance)
+
+
+def _corner_pick(node, reach=None):
+    """Choose the pivot side: lidar first, camera lean as the fallback.
 
     At a corner the lane continues on the open side while the course wall closes
-    the other one, so the side with more free range is the turn. The camera guess
-    was wrong on 1 of 2 real corners (2026-10-09), which cost a 300-degree sweep.
+    the other one. With the front closed (`reach` given), a side that opens into a
+    corridor wins outright; 18:39 on 2026-10-09 had side clearances of 0.42 and
+    0.35 m, too close to call. Then the side with more free range. The camera
+    guess was wrong on 1 of 2 real corners, which cost a 300-degree sweep.
     """
+    if reach is not None and hasattr(node, 'open_heading'):
+        left, right = node.open_heading(1, reach), node.open_heading(-1, reach)
+        if (left is None) != (right is None):
+            side = 1 if left is not None else -1
+            return side, f"라이다 {'왼쪽' if side > 0 else '오른쪽'}만 {reach:.1f} m 넘게 트임"
     clearance = node.side_clearance()
     if clearance:
         left, right = clearance
@@ -611,15 +648,29 @@ def _corner_pivot(node, args, now, trigger='차선 소실'):
     """
     corner = getattr(node, 'corner', None)
     if corner is None:
-        first, basis = _corner_pick(node)
-        # A wall filling the front means a real corner: do not stop turning early.
-        at_wall = trigger.startswith('정면 벽') or bool(node.wall_ahead(args.corner_wall_distance))
+        # Front closed (wall within reach) means a real corner, however it was noticed:
+        # on 2026-10-09 18:39 every corner started with the lane lost, not the wall rule.
+        reach = _corner_reach(args)
+        clear = node.front_clear()
+        closed = (trigger.startswith('정면 벽') or bool(node.wall_ahead(args.corner_wall_distance))
+                  or (clear is not None and clear < reach))
+        first, basis = _corner_pick(node, reach if closed else None)
+        target = node.open_heading(first, reach) if closed and hasattr(node, 'open_heading') else None
+        if target is not None:
+            # Reach the corridor heading before the side limit ends the first sweep.
+            target = first * min(abs(target), math.radians(args.corner_max_turn_deg - 5.0))
         corner = node.corner = dict(
             first=first, direction=first, started_at=now, failed=False, overshoot=0,
-            yaw0=_corner_heading(node), turned=0.0, phase='first', phase_at=now,
-            min_turn=math.radians(max(0.0, args.corner_min_turn_deg)) if at_wall else 0.0)
-        LOGGER.info('코너 진입(%s): %s으로 회전 (%s, 회전량 %s)', trigger, '왼쪽' if first > 0 else '오른쪽', basis,
-                    'odom' if corner['yaw0'] is not None else 'odom 없음: 시간으로 추정')
+            yaw0=_corner_heading(node), turned=0.0, phase='first', phase_at=now, target=target,
+            min_turn=math.radians(max(0.0, args.corner_min_turn_deg)) if closed and target is None else 0.0)
+        if target is not None:
+            plan = f'라이다 트인 쪽 {abs(math.degrees(target)):.0f}도까지'
+        elif closed:
+            plan = f'최소 {args.corner_min_turn_deg:.0f}도'
+        else:
+            plan = '정면 트임: 차선만 다시 찾음'
+        LOGGER.info('코너 진입(%s): %s으로 회전 (%s, %s, 회전량 %s)', trigger, '왼쪽' if first > 0 else '오른쪽',
+                    basis, plan, 'odom' if corner['yaw0'] is not None else 'odom 없음: 시간으로 추정')
     rate = args.max_angular
     if rate <= 0.0 or args.corner_max_turn_deg <= 0.0:
         return 0.0, 0.0, '주행 영역 불명확: 정지'
@@ -654,32 +705,35 @@ def _corner_pivot(node, args, now, trigger='차선 소실'):
 
 
 def _corner_keeps_turning(node, args, corner, error, now):
-    """While pivoting, keep turning until the lane sits ahead and the wall is gone.
+    """While pivoting, keep turning until the robot faces the next corridor.
 
-    Resuming early (lane at the side, wall still close) drove a forward arc that
-    cut the inner tape on 2026-10-09.
+    With the front closed the robot first turns to the lidar's open-corridor heading
+    (or corner_min_turn_deg without one); only then may the lane end the turn. On
+    2026-10-09 the floor at a corner looked wide and centred after 20-40 degrees, and
+    driving on from there went diagonally into the corner.
     """
     if error is None:
         return True
     if corner['failed']:
         return abs(error) > 0.25            # only a lane ahead ends a failed search
-    if abs(_corner_turned(node, corner, now, args)) < corner.get('min_turn', 0.0):
-        # 2026-10-09 17:15: the floor in front of a corner wall looks wide and
-        # centred after ~20-30 degrees; driving on from there crossed the tape.
-        corner['overshoot'] = 0
-        return True
+    if corner['phase'] == 'first':
+        target = corner.get('target')
+        need = abs(target) - math.radians(10.0) if target is not None else corner.get('min_turn', 0.0)
+        if abs(_corner_turned(node, corner, now, args)) < need:
+            corner['overshoot'] = 0
+            return True
+        if target is not None and abs(error) <= 0.5:
+            return False                    # facing the open corridor and the lane is roughly ahead
     if abs(error) > 0.25 and error * corner['direction'] > 0:
         # Lane firmly on the far side for several frames: we overshot, steering takes over.
         corner['overshoot'] += 1
         return corner['overshoot'] < 3
     corner['overshoot'] = 0
-    if abs(error) > 0.5:
-        return True                         # still entering from the turning side
-    # At a corner the floor looks wide and centred long before the robot faces the
-    # next corridor (exited after ~20 degrees on 2026-10-09 and cut the corner).
+    if abs(error) > 0.3:
+        return True                         # lane still off to the turning side
     # Only a clear narrow cone ahead proves the turn is done.
     clear = node.front_clear()
-    return clear is None or clear < 2.0 * max(args.corner_wall_distance, args.stop_distance)
+    return clear is None or clear < _corner_reach(args)
 
 
 def _drive_guard(command, front, stop_distance):
