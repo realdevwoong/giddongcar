@@ -100,7 +100,7 @@ YOLO는 패키지의 고정 모델 경로 `pinky_fleet/models/yolo11n.pt`를 사
 
 대시보드와 별도로 카메라 시작, 학습 모델 추론, 화면 표시를 하는 `vision_drive`를 실행할 수 있습니다. 첫 실행은 **관찰 모드**이며 속도 명령을 내지 않습니다. 학습된 Ultralytics segmentation 모델 파일은 직접 준비해 경로로 전달합니다. 모델에 적어도 `driveable_area` segmentation 클래스가 있어야 차선 추종 판단이 가능합니다. COCO 객체 모델용 기본 정지 클래스는 `person`, `bicycle`, `car`, `motorcycle`, `bus`, `truck`, `bench`, `backpack`, `suitcase`, `chair`입니다. 클래스 이름이 다르면 인자를 바꾸세요.
 
-주행 실험은 Nav2/대시보드가 같은 로봇의 `/cmd_vel`을 발행하지 않는 상태에서만 가능합니다. 현재 구현은 지도 목적지를 쓰는 Nav2 주행이 아니라, 카메라 영상에서 주행 가능 mask의 중심을 따라가는 **저속 시각 추종 prototype**입니다. 로봇 속도 watchdog 및 비상정지를 확인하고, 사람이 바로 옆에서 감독하는 통제 구역에서만 사용하세요. 카메라·추론·라이다가 stale하거나 주행 영역이 불분명하면 0 속도를 발행합니다. 프로세스 강제 종료/PC 전원 상실에도 정지하는 로봇 측 watchdog 없이는 주행 모드를 실행하지 마세요.
+주행 실험은 Nav2/대시보드가 같은 로봇의 `/cmd_vel`을 발행하지 않는 상태에서만 가능합니다. 현재 구현은 지도 목적지를 쓰는 Nav2 주행이 아니라, 카메라 영상에서 주행 가능 mask의 중심을 따라가는 **저속 시각 추종 prototype**입니다. 카메라·추론·라이다가 stale하거나 주행 영역이 불분명하면 정지합니다. 로봇 watchdog이 확인되지 않은 상태에서 실행할 때는 `--confirm-attended-test-without-watchdog` 옵션을 추가해야 하며, 사람이 로봇 바로 옆에서 물리 비상정지를 잡고 감독하는 통제 구역에서만 사용하세요. 이 옵션은 PC나 네트워크가 끊겼을 때 정지를 보장하지 않습니다.
 
 ROS 도메인은 해당 로봇 값(로봇1 `15`, 로봇2 `17`)을 사용하고, `ROS_STATIC_PEERS`에는 로봇 IP를 둡니다. Pinky Studio 영상 창은 닫아 두세요. `.pt` 모델 파일은 Git에 추가하지 않습니다.
 
@@ -113,10 +113,13 @@ export PYTHONPATH="$HOME/giddongcar/.venv/lib/python3.12/site-packages${PYTHONPA
 # 영상 + segmentation/객체 인식만 확인 (속도 명령 없음)
 ros2 run pinky_fleet vision_drive --robot-ip 192.168.0.6 --model /경로/학습모델.pt --mode observe
 
-# 통제된 저속 lane-follow 실험. watchdog/E-stop 확인 뒤, 직접 감독할 때만 실행
-ros2 run pinky_fleet vision_drive --robot-ip 192.168.0.6 --model /경로/학습모델.pt \
-  --mode drive --enable-motion --confirm-supervised-test --watchdog-verified
+# YAML preset으로 통제된 저속 lane-follow 실험. 로봇 옆에서 직접 감독할 때만 실행
+ros2 run pinky_fleet vision_drive --robot-ip 192.168.0.6 \
+  --preset ~/giddongcar/pinky_pro/src/pinky_fleet/config/vision_drive_supervised.yaml \
+  --enable-motion --confirm-supervised-test --confirm-attended-test-without-watchdog
 ```
+
+`--preset`은 모델, 모드, 횡단보도 정책, 속도 상한, 조향값을 불러옵니다. 명령행에서 지정한 값은 preset보다 우선합니다. 로봇 IP와 모션 허용·감독 확인 옵션(`--enable-motion`, `--confirm-supervised-test`, `--watchdog-verified`, `--confirm-attended-test-without-watchdog`)은 YAML에 넣을 수 없고 매번 명령행에서 직접 지정합니다. preset만 주면 주행 모드 확인에서 멈추고 로봇은 움직이지 않습니다. 관찰만 할 때는 `--mode observe`를 명령행에 추가해 preset의 `drive` 값을 덮어쓰고, `--model /경로/모델.pt`로 다른 모델을 사용할 수 있습니다. 설치된 preset은 `$(ros2 pkg prefix pinky_fleet)/share/pinky_fleet/config/vision_drive_supervised.yaml`에도 복사됩니다.
 
 주변에 IP가 같은 Pinky가 여럿 있으면(공유기가 달라도 `192.168.0.x`가 겹칠 수 있음) 엉뚱한 로봇의 카메라에 명령이 갈 수 있습니다. 이때는 `--ble-name pinky_6422`처럼 로봇의 BLE 이름을 지정합니다. `tape_lane_drive`도 같은 인자를 받습니다.
 
@@ -134,7 +137,7 @@ ros2 run pinky_fleet vision_drive --robot-ip 192.168.0.6 \
 
 YOLOTL의 `lane` 마스크는 도로/BEV 시점의 차선 데이터로 학습된 결과이며 Pinky 바닥의 주행 가능 영역으로 검증되지 않았습니다. 이 명령은 관찰·샘플 저장용입니다. 저장한 원본 프레임을 코스 장면별로 선별·라벨링해 전용 모델을 학습해야 합니다. COCO 기본 모델은 흰 테이프 차선, 횡단보도, 학습되지 않은 사용자 정의 장애물을 인식하지 않으며, YOLOTL은 `lane`만 탐지합니다. 실물 장애물 안전 정지는 LiDAR/Nav2 경로를 유지해야 합니다.
 
-`q` 또는 Ctrl+C로 종료하면 0 속도를 반복 발행하고 카메라 중지를 요청합니다. 정상 종료 시 동작이며 강제 종료 시 정지를 보장하지 않습니다. 초기 최대 전진 속도는 `0.04 m/s`, 전방 라이다 정지 기준은 `0.35 m`입니다. 실제 제동거리를 측정한 뒤에만 조정하세요. `--crosswalk-action slow|stop|ignore`로 횡단보도 정책을 바꿀 수 있으며 기본은 감속입니다. 이 prototype 결과를 대시보드의 Nav2 경로에 연결하려면 별도 보정 및 안전 검토가 필요합니다.
+`q` 또는 Ctrl+C로 종료하면 0 속도를 반복 발행하고 카메라 중지를 요청합니다. 정상 종료 시 동작이며 강제 종료 시 정지를 보장하지 않습니다. 저속 실험에서 최대 전진 속도는 `0.05 m/s`, 최대 각속도는 `0.25 rad/s`로 제한됩니다. `--steering-gain` 기본값은 `1.2`이며, 영상 오버레이의 자홍색 선이 먼 쪽 mask를 바탕으로 계산한 조향 미리보기입니다. 급회전에서는 `v / |w|`가 기본 반경 `0.08 m`를 넘지 않게 전진 속도를 자동으로 줄여 넓게 밀고 나가는 동작을 억제합니다. `--turn-radius-limit`으로 바꿀 수 있습니다. `--stop-distance`는 0.20 m 이상이어야 합니다. 전방 LiDAR는 인접 측정값들이 이어진 물체의 가로 폭이 `--obstacle-min-width` 이상일 때만 장애물로 처리하며, 기본값은 0.12 m입니다. 바닥의 작은 점/테이프 자국 같은 작은 반사물은 무시될 수 있습니다. 더 큰 물체만 정지 대상으로 잡으려면 이 값을 키우세요. 작은 장애물은 감지하지 못할 수 있으므로 주변을 비운 감독 실험에서만 사용하세요. 기본 횡단보도 정책은 `stop-then-go`이며 10초 정지 후 재개합니다. `--crosswalk-action slow|stop|stop-then-go|ignore`와 `--crosswalk-stop-seconds`로 바꿀 수 있습니다. 주행 영역이 잠깐 사라지면 마지막 조향 방향으로 최대 0.6초 제자리 재탐색한 뒤, 복구되지 않으면 정지합니다. 속도·정지 기준의 현장 성능을 확인하고 이 prototype 결과를 대시보드의 Nav2 경로에 연결하려면 별도 보정 및 안전 검토가 필요합니다. [MVP 요구사항 대응표와 실행 예시](../../../docs/vision_drive_mvp.md)를 참고하세요.
 
 ### 내려받은 공개 차선 모델
 
