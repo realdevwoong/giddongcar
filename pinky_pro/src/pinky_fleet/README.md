@@ -158,6 +158,7 @@ ros2 run pinky_fleet fleet_dashboard
 - **■ 정지**는 ▶ 출발을 누를 때까지 세웁니다. 비상 정지가 아니므로 로봇 옆 감독자는 그대로 둡니다.
 - 대시보드 카메라 주소(`--robot1-camera-host`)는 비워 둡니다. 로봇 카메라는 vision_drive가 씁니다.
 - 대기가 생기고 풀릴 때마다 오른쪽 이벤트 기록에 남습니다.
+- 두 터미널의 DDS 설정(`RMW_IMPLEMENTATION`, peer 설정)이 같아야 합니다. Cyclone XML로 multicast를 끄고 `<Peers>`에 로봇만 적었다면 같은 PC의 두 프로세스가 서로 못 찾습니다. `<Peer Address="localhost"/>`를 넣으세요(2026-10-09 이 PC에서 확인).
 
 ### 내려받은 공개 차선 모델
 
