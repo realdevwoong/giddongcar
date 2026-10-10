@@ -20,6 +20,7 @@ import cv2
 import numpy as np
 import rclpy
 from geometry_msgs.msg import Twist
+from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
@@ -76,6 +77,14 @@ def parse_args(argv=None):
                         help='정지 장애물로 볼 LiDAR 물체의 최소 가로 폭 m')
     parser.add_argument('--lane-recovery-seconds', type=float, default=0.6,
                         help='주행 영역이 잠깐 사라졌을 때 마지막 조향 방향으로 제자리 재탐색할 최대 시간')
+    parser.add_argument('--corner-turn-rate', type=float, default=0.15,
+                        help='직각 코너에서 차선을 잃었을 때 odometry로 제한하며 회전할 각속도')
+    parser.add_argument('--corner-turn-max-degrees', type=float, default=110.0,
+                        help='차선 재획득 전 제자리 회전의 최대 누적 각도')
+    parser.add_argument('--corner-turn-timeout', type=float, default=14.0,
+                        help='직각 코너 회전의 최대 지속 시간')
+    parser.add_argument('--corner-turn-exit-error', type=float, default=0.20,
+                        help='연속으로 이 값 이내의 차선 오차를 얻으면 코너 회전을 종료')
     parser.add_argument('--headless', action=argparse.BooleanOptionalAction,
                         help='OpenCV 영상 창을 띄우지 않음')
     parser.add_argument('--output-dir', default='~/vision_drive_observations',
@@ -142,7 +151,14 @@ class VisionDriveNode(Node):
         self.tf_buffer = Buffer(node=self)
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.subscription = self.create_subscription(LaserScan, 'scan', self._on_scan, 10)
+        self.odom_yaw = None
+        self.odom_at = None
+        self.odom_subscription = self.create_subscription(Odometry, 'odom', self._on_odom, 10)
         self.command_pub = self.create_publisher(Twist, 'cmd_vel', 10) if mode == 'drive' else None
+
+    def _on_odom(self, message):
+        self.odom_yaw = yaw(message.pose.pose.orientation)
+        self.odom_at = time.monotonic()
 
     def _on_scan(self, message):
         self.scan = message
@@ -357,20 +373,93 @@ def _policy(node, mask, detections, args, inference_at, camera_at):
     if time.monotonic() - inference_at > 0.5 or camera_at is None or camera_at > 0.5:
         return 0.0, 0.0, '카메라/인식 지연: 정지'
     error = _lane_error(mask, args.far_lookahead_weight)
+    now = time.monotonic()
+    turn = getattr(node, 'corner_turn', None)
+    if turn is not None:
+        if node.odom_yaw is None or node.odom_at is None or now - node.odom_at > 0.5:
+            node.corner_turn = None
+            node.lane_recovery_started_at = now - args.lane_recovery_seconds
+            return 0.0, 0.0, '코너 회전 odom 입력 지연: 정지'
+        delta = math.atan2(math.sin(node.odom_yaw - turn['start_yaw']),
+                           math.cos(node.odom_yaw - turn['start_yaw']))
+        progress = turn['direction'] * delta
+        if progress > turn['max_progress'] + 0.01:
+            turn['max_progress'] = progress
+            turn['last_progress_at'] = now
+        if (progress >= math.radians(args.corner_turn_max_degrees)
+                or now - turn['started_at'] >= args.corner_turn_timeout):
+            node.corner_turn = None
+            node.lane_recovery_started_at = now - args.lane_recovery_seconds
+            return 0.0, 0.0, '코너 회전 한도 도달: 정지'
+    if turn is not None:
+        front = node.front_range(min_width=args.obstacle_min_width)
+        if front is None or front <= args.stop_distance:
+            return 0.0, 0.0, '코너 회전 중 라이다 장애물/입력: 정지'
+        if error is not None:
+            if abs(error) <= args.corner_turn_exit_error:
+                turn['aligned_frames'] += 1
+                if turn['aligned_frames'] >= 3:
+                    node.corner_turn = None
+                    turn = None
+                else:
+                    if now - turn['last_progress_at'] > 1.5:
+                        node.corner_turn = None
+                        node.lane_recovery_started_at = now - args.lane_recovery_seconds
+                        return 0.0, 0.0, '코너 회전 진전 없음: 정지'
+                    turn_rate = min(args.corner_turn_rate, args.max_angular)
+                    return (0.0, turn['direction'] * turn_rate,
+                            f'코너 정렬 확인 {turn["aligned_frames"]}/3')
+            else:
+                desired_direction = -1.0 if error > 0.0 else 1.0
+                if desired_direction != turn['direction']:
+                    node.corner_turn = None
+                    turn = None
+                else:
+                    turn['aligned_frames'] = 0
+
     if error is None:
+        if turn is None:
+            last_valid_at = getattr(node, 'last_lane_valid_at', None)
+            last_error = getattr(node, 'last_lane_error', None)
+            recently_turning = (last_valid_at is not None and now - last_valid_at <= 0.35
+                                and last_error is not None and abs(last_error) >= 0.18)
+            if recently_turning:
+                if node.odom_yaw is None or node.odom_at is None or now - node.odom_at > 0.5:
+                    node.lane_recovery_started_at = now - args.lane_recovery_seconds
+                    return 0.0, 0.0, '직각 코너 odom 입력 없음: 정지'
+                direction = -1.0 if last_error > 0.0 else 1.0
+                turn = {
+                    'direction': direction,
+                    'start_yaw': node.odom_yaw,
+                    'started_at': now,
+                    'last_progress_at': now,
+                    'max_progress': 0.0,
+                    'aligned_frames': 0,
+                }
+                node.corner_turn = turn
+        if turn is not None:
+            front = node.front_range(min_width=args.obstacle_min_width)
+            if front is None or front <= args.stop_distance:
+                return 0.0, 0.0, '코너 회전 중 라이다 장애물/입력: 정지'
+            if now - turn['last_progress_at'] > 1.5:
+                node.corner_turn = None
+                node.lane_recovery_started_at = now - args.lane_recovery_seconds
+                return 0.0, 0.0, '코너 회전 진전 없음: 정지'
+            turn_rate = min(args.corner_turn_rate, args.max_angular)
+            progress_deg = math.degrees(max(0.0, turn['max_progress']))
+            return (0.0, turn['direction'] * turn_rate,
+                    f'직각 코너 회전: 차선 재탐색 {progress_deg:.0f}°')
         recovery_started = getattr(node, 'lane_recovery_started_at', None)
         if recovery_started is None:
-            node.lane_recovery_started_at = time.monotonic()
+            node.lane_recovery_started_at = now
             recovery_started = node.lane_recovery_started_at
         last_error = getattr(node, 'last_lane_error', None)
-        elapsed = time.monotonic() - recovery_started
+        elapsed = now - recovery_started
         if (last_error is not None and abs(last_error) >= 0.06
                 and elapsed < args.lane_recovery_seconds):
-            # Turn in place toward the last visible path estimate, for a short
-            # bounded interval. Never reverse or creep forward with no lane.
+            # For a brief non-corner mask dropout, retain the short bounded search.
             recovery_rate = min(args.max_angular, 0.15)
-            gain = args.steering_gain
-            angular = max(-recovery_rate, min(recovery_rate, -gain * last_error))
+            angular = max(-recovery_rate, min(recovery_rate, -args.steering_gain * last_error))
             return 0.0, angular, '주행 영역 불명확: 방향 한정 재탐색'
         return 0.0, 0.0, '주행 영역 불명확: 정지'
     node.last_lane_error = error
@@ -459,6 +548,14 @@ def main():
                 or not math.isfinite(args.lane_recovery_seconds)
                 or args.lane_recovery_seconds < 0.0
                 or args.lane_recovery_seconds > 0.8
+                or not math.isfinite(args.corner_turn_rate)
+                or args.corner_turn_rate <= 0.0 or args.corner_turn_rate > args.max_angular
+                or not math.isfinite(args.corner_turn_max_degrees)
+                or args.corner_turn_max_degrees < 45.0 or args.corner_turn_max_degrees > 135.0
+                or not math.isfinite(args.corner_turn_timeout)
+                or args.corner_turn_timeout < 1.0 or args.corner_turn_timeout > 15.0
+                or not math.isfinite(args.corner_turn_exit_error)
+                or args.corner_turn_exit_error < 0.05 or args.corner_turn_exit_error > 0.5
                 or not math.isfinite(args.crosswalk_stop_seconds)
                 or args.crosswalk_stop_seconds < 0.0):
             raise SystemExit('초기 주행 한도는 max-linear <= 0.05 m/s, max-angular <= 0.25 rad/s, '
@@ -466,7 +563,7 @@ def main():
                              'far-lookahead-weight between 0.0 and 0.6, '
                              'turn-radius-limit between 0.03 and 0.30 m, '
                              'stop-distance >= 0.20 m, obstacle-min-width between 0.03 and 0.50 m, '
-                             'lane-recovery-seconds <= 0.8 s, '
+                             'lane-recovery-seconds <= 0.8 s, bounded corner-turn settings, '
                              'crosswalk-stop-seconds >= 0 입니다.')
 
     try:
