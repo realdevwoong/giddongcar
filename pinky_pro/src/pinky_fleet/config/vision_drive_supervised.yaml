@@ -18,9 +18,10 @@ crosswalk_stop_seconds: 10.0
 max_linear: 0.05
 max_angular: 0.25
 steering_gain: 1.2
-turn_radius_limit: 0.08
+far_lookahead_weight: 0.32
+turn_radius_limit: 0.12
 stop_distance: 0.35
 obstacle_min_width: 0.12
-lane_recovery_seconds: 0.6
+lane_recovery_seconds: 0.8
 headless: false
 output_dir: ~/vision_drive_observations

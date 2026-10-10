@@ -66,6 +66,8 @@ def parse_args(argv=None):
     parser.add_argument('--max-angular', type=float, default=0.25, help='최대 회전 속도 rad/s')
     parser.add_argument('--steering-gain', type=float, default=1.2,
                         help='먼 쪽 주행 영역 중심 오차에 적용할 조향 gain')
+    parser.add_argument('--far-lookahead-weight', type=float, default=0.32,
+                        help='조향 계산에서 먼 쪽 차선 중심이 차지하는 비중 (0~0.6)')
     parser.add_argument('--turn-radius-limit', type=float, default=0.08,
                         help='급회전 때 전진 속도를 제한할 최대 곡률 반경 m')
     parser.add_argument('--stop-distance', type=float, default=0.35,
@@ -257,8 +259,8 @@ def _lane_mask(result, args, image_shape):
     return crosswalk if lane is None else lane | crosswalk
 
 
-def _lane_error(mask):
-    """Estimate steering from several lookahead rows to anticipate bends."""
+def _lane_error(mask, far_weight=0.32):
+    """Follow the near path center while using far rows to anticipate bends."""
     if mask is None:
         return None
     height, width = mask.shape
@@ -284,22 +286,25 @@ def _lane_error(mask):
                 break
         if component == 0:
             return None
-    # The lower row reacts late at corners. Blend centers from farther lookahead
-    # rows so the steering starts following a bend before the near mask disappears.
-    centers = []
-    weights = []
-    # Far rows predict the upcoming bend; near rows keep the robot centered.
-    for fraction, weight in ((0.52, 0.65), (0.62, 0.18), (0.72, 0.11), (0.82, 0.06)):
+    centers = {}
+    # Far rows predict the bend. Near rows represent the path the robot is
+    # currently occupying and therefore get most of the steering weight.
+    for fraction in (0.52, 0.62, 0.72, 0.82, 0.90):
         row = labels[min(height - 1, int(height * fraction))]
         xs = np.flatnonzero(row == component)
         if xs.size >= max(3, int(width * 0.025)):
-            centers.append((float(xs[0]) + float(xs[-1])) / 2.0)
-            weights.append(weight)
-    # A single thin row is too fragile to steer from; fail closed until a path
-    # direction is supported by multiple parts of the visible mask.
-    if len(centers) < 3:
+            centers[fraction] = (float(xs[0]) + float(xs[-1])) / 2.0
+    near = [centers[fraction] for fraction in (0.72, 0.82, 0.90)
+            if fraction in centers]
+    far = [centers[fraction] for fraction in (0.52, 0.62)
+           if fraction in centers]
+    # Require evidence both close to the robot and ahead. This tolerates one
+    # missing row at a bend without steering from a single noisy mask slice.
+    if len(near) < 2 or not far:
         return None
-    lane_center = float(np.average(centers, weights=weights))
+    near_center = float(np.mean(near))
+    far_center = float(np.mean(far))
+    lane_center = (1.0 - far_weight) * near_center + far_weight * far_center
     return (lane_center - x_center) / max(1.0, width / 2.0)
 
 
@@ -351,7 +356,7 @@ def _policy(node, mask, detections, args, inference_at, camera_at):
 
     if time.monotonic() - inference_at > 0.5 or camera_at is None or camera_at > 0.5:
         return 0.0, 0.0, '카메라/인식 지연: 정지'
-    error = _lane_error(mask)
+    error = _lane_error(mask, args.far_lookahead_weight)
     if error is None:
         recovery_started = getattr(node, 'lane_recovery_started_at', None)
         if recovery_started is None:
@@ -444,6 +449,8 @@ def main():
                 or args.max_angular <= 0 or args.max_angular > 0.25
                 or not math.isfinite(args.steering_gain)
                 or args.steering_gain <= 0.0 or args.steering_gain > 2.0
+                or not math.isfinite(args.far_lookahead_weight)
+                or args.far_lookahead_weight < 0.0 or args.far_lookahead_weight > 0.6
                 or not math.isfinite(args.turn_radius_limit)
                 or args.turn_radius_limit < 0.03 or args.turn_radius_limit > 0.30
                 or args.stop_distance < 0.20
@@ -456,6 +463,7 @@ def main():
                 or args.crosswalk_stop_seconds < 0.0):
             raise SystemExit('초기 주행 한도는 max-linear <= 0.05 m/s, max-angular <= 0.25 rad/s, '
                              'steering-gain <= 2.0, '
+                             'far-lookahead-weight between 0.0 and 0.6, '
                              'turn-radius-limit between 0.03 and 0.30 m, '
                              'stop-distance >= 0.20 m, obstacle-min-width between 0.03 and 0.50 m, '
                              'lane-recovery-seconds <= 0.8 s, '
@@ -538,7 +546,7 @@ def main():
                 last_latency_ms = (inference_at - inference_started) * 1000.0
                 current_command = _policy(node, mask, detections, args, inference_at, camera_age)
                 overlay = result.plot()
-                lane_error = _lane_error(mask)
+                lane_error = _lane_error(mask, args.far_lookahead_weight)
                 if lane_error is not None:
                     height, width = overlay.shape[:2]
                     preview_x = int(np.clip(width / 2 + lane_error * width / 2, 0, width - 1))
