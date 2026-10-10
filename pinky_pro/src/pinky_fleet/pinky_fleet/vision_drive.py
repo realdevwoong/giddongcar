@@ -54,13 +54,13 @@ def parse_args(argv=None):
     parser.add_argument('--crosswalk-stop-seconds', type=float, default=10.0,
                         help='stop-then-go 모드에서 횡단보도 감지 후 정지할 시간')
     parser.add_argument('--mode', choices=('observe', 'drive'), default='observe')
-    parser.add_argument('--enable-motion', action='store_true',
+    parser.add_argument('--enable-motion', action=argparse.BooleanOptionalAction,
                         help='실제 주행 명령을 허용 (drive 모드에서만 적용)')
-    parser.add_argument('--confirm-supervised-test', action='store_true',
+    parser.add_argument('--confirm-supervised-test', action=argparse.BooleanOptionalAction,
                         help='장애물 없는 통제 구역에서 직접 감독함을 확인')
-    parser.add_argument('--watchdog-verified', action='store_true',
+    parser.add_argument('--watchdog-verified', action=argparse.BooleanOptionalAction,
                         help='로봇 측 cmd_vel 정지 watchdog과 비상정지를 확인')
-    parser.add_argument('--confirm-attended-test-without-watchdog', action='store_true',
+    parser.add_argument('--confirm-attended-test-without-watchdog', action=argparse.BooleanOptionalAction,
                         help='로봇 watchdog 없이 시험함을 확인; 사람이 로봇 옆에서 물리 비상정지를 잡고 감독')
     parser.add_argument('--max-linear', type=float, default=0.05, help='최대 전진 속도 m/s')
     parser.add_argument('--max-angular', type=float, default=0.25, help='최대 회전 속도 rad/s')
@@ -74,7 +74,8 @@ def parse_args(argv=None):
                         help='정지 장애물로 볼 LiDAR 물체의 최소 가로 폭 m')
     parser.add_argument('--lane-recovery-seconds', type=float, default=0.6,
                         help='주행 영역이 잠깐 사라졌을 때 마지막 조향 방향으로 제자리 재탐색할 최대 시간')
-    parser.add_argument('--headless', action='store_true', help='OpenCV 영상 창을 띄우지 않음')
+    parser.add_argument('--headless', action=argparse.BooleanOptionalAction,
+                        help='OpenCV 영상 창을 띄우지 않음')
     parser.add_argument('--output-dir', default='~/vision_drive_observations',
                         help='관찰 모드에서 프레임/결과를 저장할 디렉터리')
     raw_args = list(os.sys.argv[1:] if argv is None else argv)
@@ -94,13 +95,9 @@ def parse_args(argv=None):
             parser.error(f'preset YAML을 읽을 수 없습니다 ({preset_path}): {exc}')
         if not isinstance(preset, dict):
             parser.error('preset은 key-value 형식의 YAML mapping이어야 합니다.')
-        # Motion permission and supervision confirmations must be typed by the
-        # operator each run; a preset file alone must never make the robot move.
-        protected = {
-            'robot_ip', 'preset',
-            'enable_motion', 'confirm_supervised_test',
-            'watchdog_verified', 'confirm_attended_test_without_watchdog',
-        }
+        # The robot IP remains command-line only. Motion permissions can be
+        # saved in a user-selected preset, as explicitly requested.
+        protected = {'robot_ip', 'preset'}
         actions = {action.dest: action for action in parser._actions}
         for key, value in preset.items():
             if key in protected:
@@ -111,7 +108,7 @@ def parse_args(argv=None):
             if key in supplied:
                 continue
             try:
-                if isinstance(action, argparse._StoreTrueAction):
+                if isinstance(action, argparse.BooleanOptionalAction):
                     if not isinstance(value, bool):
                         raise ValueError('boolean 값이어야 합니다')
                 elif action.type is not None:

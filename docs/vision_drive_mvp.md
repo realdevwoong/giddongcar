@@ -21,17 +21,15 @@
 
 ## 감독형 실행 예시
 
-주행 값은 감독형 preset(`pinky_pro/src/pinky_fleet/config/vision_drive_supervised.yaml`)에 모아 두었다. 전진 속도 상한 `0.05 m/s`, 각속도 상한 `0.25 rad/s`, 먼 쪽 곡률 신호를 반영하는 `--steering-gain` `1.2`, 코너 반경 제한 `0.08 m`, 라이다 정지 기준 `0.35 m`, 횡단보도 10초 정지다. 모델 경로는 `~/vision_drive_observations/train_runs/lane_seg_v1/weights/best.pt`를 가정한다. 모션 허용·감독 확인 옵션은 preset에 넣을 수 없으므로 매번 명령행에 적는다.
+주행 값은 감독형 preset(`pinky_pro/src/pinky_fleet/config/vision_drive_supervised.yaml`)에 모아 두었다. 전진 속도 상한 `0.05 m/s`, 각속도 상한 `0.25 rad/s`, 먼 쪽 곡률 신호를 반영하는 `--steering-gain` `1.2`, 코너 반경 제한 `0.08 m`, 라이다 정지 기준 `0.35 m`, 횡단보도 10초 정지다. 모델 경로는 `~/vision_drive_observations/train_runs/lane_seg_v1/weights/best.pt`를 가정한다. preset에 모션 허용과 감독 확인 옵션도 저장되어 있어 preset 실행만으로 주행이 활성화된다. 로봇 IP는 명령행에 지정한다.
 
 ```bash
 ros2 run pinky_fleet vision_drive \
   --robot-ip <로봇 IP> \
-  --preset ~/giddongcar/pinky_pro/src/pinky_fleet/config/vision_drive_supervised.yaml \
-  --enable-motion --confirm-supervised-test \
-  --confirm-attended-test-without-watchdog
+  --preset ~/giddongcar/pinky_pro/src/pinky_fleet/config/vision_drive_supervised.yaml
 ```
 
-값을 바꿔 비교할 때는 preset을 고치지 않고 명령행에 덧붙인다. 명령행 값이 preset보다 우선한다. 예를 들어 정지 거리를 허용 최솟값으로 줄이려면 `--stop-distance 0.20`, 다른 모델은 `--model /경로/모델.pt`를 추가한다.
+값을 바꿔 비교할 때는 preset을 고치거나 명령행에서 덮어쓴다. 명령행 값이 preset보다 우선한다. 예를 들어 정지 거리를 허용 최솟값으로 줄이려면 `--stop-distance 0.20`, 다른 모델은 `--model /경로/모델.pt`를 추가한다.
 
 현재 bringup의 `cmd_vel` watchdog은 확인되지 않았다. 따라서 이 실행은 로봇 옆 감독자와 물리 비상정지가 있는 통제 구역의 짧은 실험에 한정한다. 화면에서 예상과 다르게 움직이면 `q` 또는 Ctrl+C로 종료한다. 강제 종료나 PC/네트워크 손실에 대한 정지는 보장되지 않는다.
 

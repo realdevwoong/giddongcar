@@ -1,11 +1,18 @@
-# 통제 구역에서 사람이 로봇 옆을 지키며 진행하는 저속 차선 주행 실험용
-# robot_ip와 모션 허용/감독 확인(--enable-motion, --confirm-supervised-test,
-# --watchdog-verified 또는 --confirm-attended-test-without-watchdog)은
-# 안전을 위해 매번 명령행에서 지정한다. 이 파일에 넣으면 실행이 거부된다.
+# 이 preset은 실제 주행을 활성화한다. 사람이 로봇 옆에서 감독하는
+# 통제 구역에서만 사용한다. robot_ip는 실행 시 명령행으로 지정한다.
+enable_motion: true
+confirm_supervised_test: true
+watchdog_verified: false
+confirm_attended_test_without_watchdog: true
+
 model: ~/vision_drive_observations/train_runs/lane_seg_v1/weights/best.pt
 mode: drive
+camera_port: 5000
+ble_name: ""
 device: auto
 driveable_class: driveable_area
+obstacle_classes: person,bicycle,car,motorcycle,bus,truck,bench,backpack,suitcase,chair
+crosswalk_class: crosswalk
 crosswalk_action: stop-then-go
 crosswalk_stop_seconds: 10.0
 max_linear: 0.05
@@ -15,3 +22,5 @@ turn_radius_limit: 0.08
 stop_distance: 0.35
 obstacle_min_width: 0.12
 lane_recovery_seconds: 0.6
+headless: false
+output_dir: ~/vision_drive_observations
