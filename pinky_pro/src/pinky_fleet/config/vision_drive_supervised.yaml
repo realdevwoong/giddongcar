@@ -24,6 +24,7 @@ stop_distance: 0.35
 obstacle_min_width: 0.12
 lane_recovery_seconds: 0.8
 corner_turn_rate: 0.17
+corner_turn_min_degrees: 30.0
 corner_turn_max_degrees: 110.0
 corner_turn_timeout: 14.0
 corner_turn_exit_error: 0.20

@@ -81,6 +81,8 @@ def parse_args(argv=None):
                         help='직각 코너에서 차선을 잃었을 때 odometry로 제한하며 회전할 각속도')
     parser.add_argument('--corner-turn-max-degrees', type=float, default=110.0,
                         help='차선 재획득 전 제자리 회전의 최대 누적 각도')
+    parser.add_argument('--corner-turn-min-degrees', type=float, default=30.0,
+                        help='차선이 일시적으로 보여도 코너 회복을 끝내지 않을 최소 회전 각도')
     parser.add_argument('--corner-turn-timeout', type=float, default=14.0,
                         help='직각 코너 회전의 최대 지속 시간')
     parser.add_argument('--corner-turn-exit-error', type=float, default=0.20,
@@ -395,10 +397,21 @@ def _policy(node, mask, detections, args, inference_at, camera_at):
         front = node.front_range(min_width=args.obstacle_min_width)
         if front is None or front <= args.stop_distance:
             return 0.0, 0.0, '코너 회전 중 라이다 장애물/입력: 정지'
+        min_progress = math.radians(args.corner_turn_min_degrees)
+        if turn['max_progress'] < min_progress:
+            turn['aligned_frames'] = 0
+            if now - turn['last_progress_at'] > 1.5:
+                node.corner_turn = None
+                node.lane_recovery_started_at = now - args.lane_recovery_seconds
+                return 0.0, 0.0, '코너 회전 진전 없음: 정지'
+            turn_rate = min(args.corner_turn_rate, args.max_angular)
+            progress_deg = math.degrees(max(0.0, turn['max_progress']))
+            return (0.0, turn['direction'] * turn_rate,
+                    f'직각 코너 회전: 최소 각도 {progress_deg:.0f}/{args.corner_turn_min_degrees:.0f}°')
         if error is not None:
             if abs(error) <= args.corner_turn_exit_error:
                 turn['aligned_frames'] += 1
-                if turn['aligned_frames'] >= 3:
+                if turn['aligned_frames'] >= 5:
                     node.corner_turn = None
                     turn = None
                 else:
@@ -408,7 +421,7 @@ def _policy(node, mask, detections, args, inference_at, camera_at):
                         return 0.0, 0.0, '코너 회전 진전 없음: 정지'
                     turn_rate = min(args.corner_turn_rate, args.max_angular)
                     return (0.0, turn['direction'] * turn_rate,
-                            f'코너 정렬 확인 {turn["aligned_frames"]}/3')
+                            f'코너 정렬 확인 {turn["aligned_frames"]}/5')
             else:
                 desired_direction = -1.0 if error > 0.0 else 1.0
                 if desired_direction != turn['direction']:
@@ -552,6 +565,9 @@ def main():
                 or args.corner_turn_rate <= 0.0 or args.corner_turn_rate > args.max_angular
                 or not math.isfinite(args.corner_turn_max_degrees)
                 or args.corner_turn_max_degrees < 45.0 or args.corner_turn_max_degrees > 135.0
+                or not math.isfinite(args.corner_turn_min_degrees)
+                or args.corner_turn_min_degrees < 10.0
+                or args.corner_turn_min_degrees >= args.corner_turn_max_degrees
                 or not math.isfinite(args.corner_turn_timeout)
                 or args.corner_turn_timeout < 1.0 or args.corner_turn_timeout > 15.0
                 or not math.isfinite(args.corner_turn_exit_error)
