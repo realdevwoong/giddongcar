@@ -20,6 +20,7 @@ import cv2
 import numpy as np
 import rclpy
 from geometry_msgs.msg import Twist
+from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
@@ -54,18 +55,20 @@ def parse_args(argv=None):
     parser.add_argument('--crosswalk-stop-seconds', type=float, default=10.0,
                         help='stop-then-go 모드에서 횡단보도 감지 후 정지할 시간')
     parser.add_argument('--mode', choices=('observe', 'drive'), default='observe')
-    parser.add_argument('--enable-motion', action='store_true',
+    parser.add_argument('--enable-motion', action=argparse.BooleanOptionalAction,
                         help='실제 주행 명령을 허용 (drive 모드에서만 적용)')
-    parser.add_argument('--confirm-supervised-test', action='store_true',
+    parser.add_argument('--confirm-supervised-test', action=argparse.BooleanOptionalAction,
                         help='장애물 없는 통제 구역에서 직접 감독함을 확인')
-    parser.add_argument('--watchdog-verified', action='store_true',
+    parser.add_argument('--watchdog-verified', action=argparse.BooleanOptionalAction,
                         help='로봇 측 cmd_vel 정지 watchdog과 비상정지를 확인')
-    parser.add_argument('--confirm-attended-test-without-watchdog', action='store_true',
+    parser.add_argument('--confirm-attended-test-without-watchdog', action=argparse.BooleanOptionalAction,
                         help='로봇 watchdog 없이 시험함을 확인; 사람이 로봇 옆에서 물리 비상정지를 잡고 감독')
     parser.add_argument('--max-linear', type=float, default=0.05, help='최대 전진 속도 m/s')
     parser.add_argument('--max-angular', type=float, default=0.25, help='최대 회전 속도 rad/s')
     parser.add_argument('--steering-gain', type=float, default=1.2,
                         help='먼 쪽 주행 영역 중심 오차에 적용할 조향 gain')
+    parser.add_argument('--far-lookahead-weight', type=float, default=0.32,
+                        help='조향 계산에서 먼 쪽 차선 중심이 차지하는 비중 (0~0.6)')
     parser.add_argument('--turn-radius-limit', type=float, default=0.08,
                         help='급회전 때 전진 속도를 제한할 최대 곡률 반경 m')
     parser.add_argument('--stop-distance', type=float, default=0.35,
@@ -74,9 +77,22 @@ def parse_args(argv=None):
                         help='정지 장애물로 볼 LiDAR 물체의 최소 가로 폭 m')
     parser.add_argument('--lane-recovery-seconds', type=float, default=0.6,
                         help='주행 영역이 잠깐 사라졌을 때 마지막 조향 방향으로 제자리 재탐색할 최대 시간')
-    parser.add_argument('--headless', action='store_true', help='OpenCV 영상 창을 띄우지 않음')
+    parser.add_argument('--corner-turn-rate', type=float, default=0.15,
+                        help='직각 코너에서 차선을 잃었을 때 odometry로 제한하며 회전할 각속도')
+    parser.add_argument('--corner-turn-max-degrees', type=float, default=110.0,
+                        help='차선 재획득 전 제자리 회전의 최대 누적 각도')
+    parser.add_argument('--corner-turn-min-degrees', type=float, default=30.0,
+                        help='차선이 일시적으로 보여도 코너 회복을 끝내지 않을 최소 회전 각도')
+    parser.add_argument('--corner-turn-timeout', type=float, default=14.0,
+                        help='직각 코너 회전의 최대 지속 시간')
+    parser.add_argument('--corner-turn-exit-error', type=float, default=0.20,
+                        help='연속으로 이 값 이내의 차선 오차를 얻으면 코너 회전을 종료')
+    parser.add_argument('--headless', action=argparse.BooleanOptionalAction,
+                        help='OpenCV 영상 창을 띄우지 않음')
     parser.add_argument('--output-dir', default='~/vision_drive_observations',
                         help='관찰 모드에서 프레임/결과를 저장할 디렉터리')
+    parser.add_argument('--log-dir', default='~/vision_drive_observations/logs',
+                        help='실행별 로그 파일을 저장할 디렉터리')
     raw_args = list(os.sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(raw_args)
     supplied = {
@@ -94,13 +110,9 @@ def parse_args(argv=None):
             parser.error(f'preset YAML을 읽을 수 없습니다 ({preset_path}): {exc}')
         if not isinstance(preset, dict):
             parser.error('preset은 key-value 형식의 YAML mapping이어야 합니다.')
-        # Motion permission and supervision confirmations must be typed by the
-        # operator each run; a preset file alone must never make the robot move.
-        protected = {
-            'robot_ip', 'preset',
-            'enable_motion', 'confirm_supervised_test',
-            'watchdog_verified', 'confirm_attended_test_without_watchdog',
-        }
+        # The robot IP remains command-line only. Motion permissions can be
+        # saved in a user-selected preset, as explicitly requested.
+        protected = {'robot_ip', 'preset'}
         actions = {action.dest: action for action in parser._actions}
         for key, value in preset.items():
             if key in protected:
@@ -111,7 +123,7 @@ def parse_args(argv=None):
             if key in supplied:
                 continue
             try:
-                if isinstance(action, argparse._StoreTrueAction):
+                if isinstance(action, argparse.BooleanOptionalAction):
                     if not isinstance(value, bool):
                         raise ValueError('boolean 값이어야 합니다')
                 elif action.type is not None:
@@ -143,7 +155,14 @@ class VisionDriveNode(Node):
         self.tf_buffer = Buffer(node=self)
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.subscription = self.create_subscription(LaserScan, 'scan', self._on_scan, 10)
+        self.odom_yaw = None
+        self.odom_at = None
+        self.odom_subscription = self.create_subscription(Odometry, 'odom', self._on_odom, 10)
         self.command_pub = self.create_publisher(Twist, 'cmd_vel', 10) if mode == 'drive' else None
+
+    def _on_odom(self, message):
+        self.odom_yaw = yaw(message.pose.pose.orientation)
+        self.odom_at = time.monotonic()
 
     def _on_scan(self, message):
         self.scan = message
@@ -260,8 +279,8 @@ def _lane_mask(result, args, image_shape):
     return crosswalk if lane is None else lane | crosswalk
 
 
-def _lane_error(mask):
-    """Estimate steering from several lookahead rows to anticipate bends."""
+def _lane_error(mask, far_weight=0.32):
+    """Follow the near path center while using far rows to anticipate bends."""
     if mask is None:
         return None
     height, width = mask.shape
@@ -287,22 +306,25 @@ def _lane_error(mask):
                 break
         if component == 0:
             return None
-    # The lower row reacts late at corners. Blend centers from farther lookahead
-    # rows so the steering starts following a bend before the near mask disappears.
-    centers = []
-    weights = []
-    # Far rows predict the upcoming bend; near rows keep the robot centered.
-    for fraction, weight in ((0.52, 0.65), (0.62, 0.18), (0.72, 0.11), (0.82, 0.06)):
+    centers = {}
+    # Far rows predict the bend. Near rows represent the path the robot is
+    # currently occupying and therefore get most of the steering weight.
+    for fraction in (0.52, 0.62, 0.72, 0.82, 0.90):
         row = labels[min(height - 1, int(height * fraction))]
         xs = np.flatnonzero(row == component)
         if xs.size >= max(3, int(width * 0.025)):
-            centers.append((float(xs[0]) + float(xs[-1])) / 2.0)
-            weights.append(weight)
-    # A single thin row is too fragile to steer from; fail closed until a path
-    # direction is supported by multiple parts of the visible mask.
-    if len(centers) < 3:
+            centers[fraction] = (float(xs[0]) + float(xs[-1])) / 2.0
+    near = [centers[fraction] for fraction in (0.72, 0.82, 0.90)
+            if fraction in centers]
+    far = [centers[fraction] for fraction in (0.52, 0.62)
+           if fraction in centers]
+    # Require evidence both close to the robot and ahead. This tolerates one
+    # missing row at a bend without steering from a single noisy mask slice.
+    if len(near) < 2 or not far:
         return None
-    lane_center = float(np.average(centers, weights=weights))
+    near_center = float(np.mean(near))
+    far_center = float(np.mean(far))
+    lane_center = (1.0 - far_weight) * near_center + far_weight * far_center
     return (lane_center - x_center) / max(1.0, width / 2.0)
 
 
@@ -354,21 +376,105 @@ def _policy(node, mask, detections, args, inference_at, camera_at):
 
     if time.monotonic() - inference_at > 0.5 or camera_at is None or camera_at > 0.5:
         return 0.0, 0.0, '카메라/인식 지연: 정지'
-    error = _lane_error(mask)
+    error = _lane_error(mask, args.far_lookahead_weight)
+    now = time.monotonic()
+    turn = getattr(node, 'corner_turn', None)
+    if turn is not None:
+        if node.odom_yaw is None or node.odom_at is None or now - node.odom_at > 0.5:
+            node.corner_turn = None
+            node.lane_recovery_started_at = now - args.lane_recovery_seconds
+            return 0.0, 0.0, '코너 회전 odom 입력 지연: 정지'
+        delta = math.atan2(math.sin(node.odom_yaw - turn['start_yaw']),
+                           math.cos(node.odom_yaw - turn['start_yaw']))
+        progress = turn['direction'] * delta
+        if progress > turn['max_progress'] + 0.01:
+            turn['max_progress'] = progress
+            turn['last_progress_at'] = now
+        if (progress >= math.radians(args.corner_turn_max_degrees)
+                or now - turn['started_at'] >= args.corner_turn_timeout):
+            node.corner_turn = None
+            node.lane_recovery_started_at = now - args.lane_recovery_seconds
+            return 0.0, 0.0, '코너 회전 한도 도달: 정지'
+    if turn is not None:
+        front = node.front_range(min_width=args.obstacle_min_width)
+        if front is None or front <= args.stop_distance:
+            return 0.0, 0.0, '코너 회전 중 라이다 장애물/입력: 정지'
+        min_progress = math.radians(args.corner_turn_min_degrees)
+        if turn['max_progress'] < min_progress:
+            turn['aligned_frames'] = 0
+            if now - turn['last_progress_at'] > 1.5:
+                node.corner_turn = None
+                node.lane_recovery_started_at = now - args.lane_recovery_seconds
+                return 0.0, 0.0, '코너 회전 진전 없음: 정지'
+            turn_rate = min(args.corner_turn_rate, args.max_angular)
+            progress_deg = math.degrees(max(0.0, turn['max_progress']))
+            return (0.0, turn['direction'] * turn_rate,
+                    f'직각 코너 회전: 최소 각도 {progress_deg:.0f}/{args.corner_turn_min_degrees:.0f}°')
+        if error is not None:
+            if abs(error) <= args.corner_turn_exit_error:
+                turn['aligned_frames'] += 1
+                if turn['aligned_frames'] >= 5:
+                    node.corner_turn = None
+                    turn = None
+                else:
+                    if now - turn['last_progress_at'] > 1.5:
+                        node.corner_turn = None
+                        node.lane_recovery_started_at = now - args.lane_recovery_seconds
+                        return 0.0, 0.0, '코너 회전 진전 없음: 정지'
+                    turn_rate = min(args.corner_turn_rate, args.max_angular)
+                    return (0.0, turn['direction'] * turn_rate,
+                            f'코너 정렬 확인 {turn["aligned_frames"]}/5')
+            else:
+                desired_direction = -1.0 if error > 0.0 else 1.0
+                if desired_direction != turn['direction']:
+                    node.corner_turn = None
+                    turn = None
+                else:
+                    turn['aligned_frames'] = 0
+
     if error is None:
+        if turn is None:
+            last_valid_at = getattr(node, 'last_lane_valid_at', None)
+            last_error = getattr(node, 'last_lane_error', None)
+            recently_turning = (last_valid_at is not None and now - last_valid_at <= 0.35
+                                and last_error is not None and abs(last_error) >= 0.18)
+            if recently_turning:
+                if node.odom_yaw is None or node.odom_at is None or now - node.odom_at > 0.5:
+                    node.lane_recovery_started_at = now - args.lane_recovery_seconds
+                    return 0.0, 0.0, '직각 코너 odom 입력 없음: 정지'
+                direction = -1.0 if last_error > 0.0 else 1.0
+                turn = {
+                    'direction': direction,
+                    'start_yaw': node.odom_yaw,
+                    'started_at': now,
+                    'last_progress_at': now,
+                    'max_progress': 0.0,
+                    'aligned_frames': 0,
+                }
+                node.corner_turn = turn
+        if turn is not None:
+            front = node.front_range(min_width=args.obstacle_min_width)
+            if front is None or front <= args.stop_distance:
+                return 0.0, 0.0, '코너 회전 중 라이다 장애물/입력: 정지'
+            if now - turn['last_progress_at'] > 1.5:
+                node.corner_turn = None
+                node.lane_recovery_started_at = now - args.lane_recovery_seconds
+                return 0.0, 0.0, '코너 회전 진전 없음: 정지'
+            turn_rate = min(args.corner_turn_rate, args.max_angular)
+            progress_deg = math.degrees(max(0.0, turn['max_progress']))
+            return (0.0, turn['direction'] * turn_rate,
+                    f'직각 코너 회전: 차선 재탐색 {progress_deg:.0f}°')
         recovery_started = getattr(node, 'lane_recovery_started_at', None)
         if recovery_started is None:
-            node.lane_recovery_started_at = time.monotonic()
+            node.lane_recovery_started_at = now
             recovery_started = node.lane_recovery_started_at
         last_error = getattr(node, 'last_lane_error', None)
-        elapsed = time.monotonic() - recovery_started
+        elapsed = now - recovery_started
         if (last_error is not None and abs(last_error) >= 0.06
                 and elapsed < args.lane_recovery_seconds):
-            # Turn in place toward the last visible path estimate, for a short
-            # bounded interval. Never reverse or creep forward with no lane.
+            # For a brief non-corner mask dropout, retain the short bounded search.
             recovery_rate = min(args.max_angular, 0.15)
-            gain = args.steering_gain
-            angular = max(-recovery_rate, min(recovery_rate, -gain * last_error))
+            angular = max(-recovery_rate, min(recovery_rate, -args.steering_gain * last_error))
             return 0.0, angular, '주행 영역 불명확: 방향 한정 재탐색'
         return 0.0, 0.0, '주행 영역 불명확: 정지'
     node.last_lane_error = error
@@ -431,8 +537,16 @@ def _policy(node, mask, detections, args, inference_at, camera_at):
 
 
 def main():
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     args = parse_args()
+    log_dir = Path(args.log_dir).expanduser()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"vision_drive_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{os.getpid()}.log"
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s %(levelname)s %(message)s',
+        handlers=(logging.StreamHandler(), logging.FileHandler(log_path, encoding='utf-8')),
+    )
+    LOGGER.info('실행 로그 파일: %s', log_path)
     model_path = Path(args.model).expanduser()
     if not model_path.is_file():
         raise SystemExit(f'학습 모델 파일을 찾을 수 없습니다: {model_path}')
@@ -447,6 +561,8 @@ def main():
                 or args.max_angular <= 0 or args.max_angular > 0.25
                 or not math.isfinite(args.steering_gain)
                 or args.steering_gain <= 0.0 or args.steering_gain > 2.0
+                or not math.isfinite(args.far_lookahead_weight)
+                or args.far_lookahead_weight < 0.0 or args.far_lookahead_weight > 0.6
                 or not math.isfinite(args.turn_radius_limit)
                 or args.turn_radius_limit < 0.03 or args.turn_radius_limit > 0.30
                 or args.stop_distance < 0.20
@@ -455,13 +571,25 @@ def main():
                 or not math.isfinite(args.lane_recovery_seconds)
                 or args.lane_recovery_seconds < 0.0
                 or args.lane_recovery_seconds > 0.8
+                or not math.isfinite(args.corner_turn_rate)
+                or args.corner_turn_rate <= 0.0 or args.corner_turn_rate > args.max_angular
+                or not math.isfinite(args.corner_turn_max_degrees)
+                or args.corner_turn_max_degrees < 45.0 or args.corner_turn_max_degrees > 135.0
+                or not math.isfinite(args.corner_turn_min_degrees)
+                or args.corner_turn_min_degrees < 10.0
+                or args.corner_turn_min_degrees >= args.corner_turn_max_degrees
+                or not math.isfinite(args.corner_turn_timeout)
+                or args.corner_turn_timeout < 1.0 or args.corner_turn_timeout > 15.0
+                or not math.isfinite(args.corner_turn_exit_error)
+                or args.corner_turn_exit_error < 0.05 or args.corner_turn_exit_error > 0.5
                 or not math.isfinite(args.crosswalk_stop_seconds)
                 or args.crosswalk_stop_seconds < 0.0):
             raise SystemExit('초기 주행 한도는 max-linear <= 0.05 m/s, max-angular <= 0.25 rad/s, '
                              'steering-gain <= 2.0, '
+                             'far-lookahead-weight between 0.0 and 0.6, '
                              'turn-radius-limit between 0.03 and 0.30 m, '
                              'stop-distance >= 0.20 m, obstacle-min-width between 0.03 and 0.50 m, '
-                             'lane-recovery-seconds <= 0.8 s, '
+                             'lane-recovery-seconds <= 0.8 s, bounded corner-turn settings, '
                              'crosswalk-stop-seconds >= 0 입니다.')
 
     try:
@@ -541,7 +669,7 @@ def main():
                 last_latency_ms = (inference_at - inference_started) * 1000.0
                 current_command = _policy(node, mask, detections, args, inference_at, camera_age)
                 overlay = result.plot()
-                lane_error = _lane_error(mask)
+                lane_error = _lane_error(mask, args.far_lookahead_weight)
                 if lane_error is not None:
                     height, width = overlay.shape[:2]
                     preview_x = int(np.clip(width / 2 + lane_error * width / 2, 0, width - 1))
@@ -583,6 +711,9 @@ def main():
                 node.command_pub.publish(command)
                 last_control_at = time.monotonic()
                 current_command = (linear, angular, reason)
+                front_text = '없음' if front is None else f'{front:.2f}m'
+                LOGGER.info('drive publish policy=%s command=(v=%.3f,w=%.3f) front=%s',
+                            reason, linear, angular, front_text)
 
             if not args.headless and overlay is not None:
                 cv2.imshow('Pinky vision drive (q = stop)', overlay)

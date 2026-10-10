@@ -7,8 +7,8 @@
 | 요구사항 | 현재 구현 | 남은 확인 |
 |---|---|---|
 | 차선 추종·중앙 정렬 | `driveable_area` segmentation 중심 오차를 사용한다. 여러 영상 높이에서 중심을 계산해 먼 쪽 곡선에 더 큰 비중을 둔다. 영상에는 추정 조향점을 자홍색으로 표시한다. | S자·좌/우 90도 코스에서 연속 주행하며 오버레이와 조향 로그를 확인한다. |
-| 코너에서 벽 쪽으로 밀림 방지 | 회전 요구량이 커질수록 전진 속도를 낮춰 `v / |w|`를 `--turn-radius-limit` 이내로 제한한다. 기본 반경은 0.08m다. | 실제 코스의 폭과 회전 성능에 맞는 반경인지 실물 시험이 필요하다. |
-| 주행 영역 손실 | 마지막으로 추정한 회전 방향으로 최대 0.6초 제자리 재탐색한다. 전진·후진 탐색은 하지 않고, 시간이 지나도 영역을 못 찾으면 정지한다. | 실물에서 재탐색 각도와 시간을 검토한다. 기본 최대 각속도는 0.15 rad/s로 제한한다. |
+| 코너에서 벽 쪽으로 밀림 방지 | 회전 요구량이 커질수록 전진 속도를 낮춰 `v / |w|`를 `--turn-radius-limit` 이내로 제한한다. preset 반경은 0.12m로 조정했다. 조향은 가까운 차선 중심을 우선하고 먼 쪽 mask로 회전을 미리 준비한다. | 실제 코스의 폭과 회전 성능에 맞는 반경인지 실물 시험이 필요하다. |
+| 주행 영역 손실 | 최근 강한 회전 뒤 mask를 잃으면 odometry로 각도를 재며 최소 30도, 최대 110도 또는 14초까지 제자리 재탐색한다. 최소 회전 후 차선 중심 오차가 5프레임 연속 기준 안에 들어오면 회전을 끝내고, 진행 정체·입력 지연·한도 초과 시 정지한다. 그 외 짧은 mask 손실은 최대 0.8초 재탐색한다. | 실물에서 코너 모드의 각도 한도와 차선 복귀 기준을 확인한다. preset 코너 회전 속도는 0.17 rad/s다. |
 | 횡단보도 | `crosswalk`가 경로 안에서 감지되면 기본 10초 정지하고, 감지가 이어져도 시간이 지나면 진행한다. `--crosswalk-stop-seconds`로 시간을 조정할 수 있다. 조향은 `driveable_area`와 `crosswalk` mask를 합쳐 계산한다. 학습된 주행 영역은 횡단보도 부분이 비어 있어서, 합치지 않으면 횡단보도 위에서 차선을 잃고 멈춘다. | 코스 횡단보도의 감지 시작/종료 지점과 정지 위치를 확인한다. |
 | 장애물 정지·재주행 | 전방 LaserScan에서 인접한 반환값으로 묶인 물체 중 가로 폭이 `--obstacle-min-width` 이상인 물체가 `--stop-distance` 안에 있으면 정지한다. 기준보다 멀어지면 다음 제어 주기에 재개한다. 작은 점형 반사물은 장애물로 처리하지 않는다. 라이다는 로봇에 180° 돌려 달려 있어(URDF `rplidar_link`) scan 각도 0이 로봇 뒤쪽이다. 정면은 로봇 TF(base_link → rplidar_link)로 계산하고, TF를 받기 전에는 정지한다. | 장애물을 치웠을 때 자동 재개되는지, 멈춤·재개 거리의 흔들림이 없는지 확인한다. |
 | S자 및 큰 방향 전환 | 다중 높이 mask 기반 조향과 더 큰 비례 조향을 사용한다. `--max-angular`가 최종 각속도를 제한한다. | 데이터가 충분하지 않은 코너는 추정하지 않고 정지한다. 실제 완주 성능은 아직 검증되지 않았다. |
@@ -21,17 +21,15 @@
 
 ## 감독형 실행 예시
 
-주행 값은 감독형 preset(`pinky_pro/src/pinky_fleet/config/vision_drive_supervised.yaml`)에 모아 두었다. 전진 속도 상한 `0.05 m/s`, 각속도 상한 `0.25 rad/s`, 먼 쪽 곡률 신호를 반영하는 `--steering-gain` `1.2`, 코너 반경 제한 `0.08 m`, 라이다 정지 기준 `0.35 m`, 횡단보도 10초 정지다. 모델 경로는 `~/vision_drive_observations/train_runs/lane_seg_v1/weights/best.pt`를 가정한다. 모션 허용·감독 확인 옵션은 preset에 넣을 수 없으므로 매번 명령행에 적는다.
+주행 값은 감독형 preset(`pinky_pro/src/pinky_fleet/config/vision_drive_supervised.yaml`)에 모아 두었다. 전진 속도 상한 `0.05 m/s`, 각속도 상한 `0.25 rad/s`, 먼 쪽 곡률 신호를 반영하는 `--steering-gain` `1.2`, 먼 쪽 mask 비중 `0.32`, 코너 반경 제한 `0.12 m`, 라이다 정지 기준 `0.35 m`, 횡단보도 10초 정지다. 모델 경로는 `~/vision_drive_observations/train_runs/lane_seg_v1/weights/best.pt`를 가정한다. preset에 모션 허용과 감독 확인 옵션도 저장되어 있어 preset 실행만으로 주행이 활성화된다. 로봇 IP는 명령행에 지정한다.
 
 ```bash
 ros2 run pinky_fleet vision_drive \
   --robot-ip <로봇 IP> \
-  --preset ~/giddongcar/pinky_pro/src/pinky_fleet/config/vision_drive_supervised.yaml \
-  --enable-motion --confirm-supervised-test \
-  --confirm-attended-test-without-watchdog
+  --preset ~/giddongcar/pinky_pro/src/pinky_fleet/config/vision_drive_supervised.yaml
 ```
 
-값을 바꿔 비교할 때는 preset을 고치지 않고 명령행에 덧붙인다. 명령행 값이 preset보다 우선한다. 예를 들어 정지 거리를 허용 최솟값으로 줄이려면 `--stop-distance 0.20`, 다른 모델은 `--model /경로/모델.pt`를 추가한다.
+값을 바꿔 비교할 때는 preset을 고치거나 명령행에서 덮어쓴다. 명령행 값이 preset보다 우선한다. 예를 들어 정지 거리를 허용 최솟값으로 줄이려면 `--stop-distance 0.20`, 다른 모델은 `--model /경로/모델.pt`를 추가한다.
 
 현재 bringup의 `cmd_vel` watchdog은 확인되지 않았다. 따라서 이 실행은 로봇 옆 감독자와 물리 비상정지가 있는 통제 구역의 짧은 실험에 한정한다. 화면에서 예상과 다르게 움직이면 `q` 또는 Ctrl+C로 종료한다. 강제 종료나 PC/네트워크 손실에 대한 정지는 보장되지 않는다.
 

@@ -115,11 +115,10 @@ ros2 run pinky_fleet vision_drive --robot-ip 192.168.0.6 --model /경로/학습�
 
 # YAML preset으로 통제된 저속 lane-follow 실험. 로봇 옆에서 직접 감독할 때만 실행
 ros2 run pinky_fleet vision_drive --robot-ip 192.168.0.6 \
-  --preset ~/giddongcar/pinky_pro/src/pinky_fleet/config/vision_drive_supervised.yaml \
-  --enable-motion --confirm-supervised-test --confirm-attended-test-without-watchdog
+  --preset ~/giddongcar/pinky_pro/src/pinky_fleet/config/vision_drive_supervised.yaml
 ```
 
-`--preset`은 모델, 모드, 횡단보도 정책, 속도 상한, 조향값을 불러옵니다. 명령행에서 지정한 값은 preset보다 우선합니다. 로봇 IP와 모션 허용·감독 확인 옵션(`--enable-motion`, `--confirm-supervised-test`, `--watchdog-verified`, `--confirm-attended-test-without-watchdog`)은 YAML에 넣을 수 없고 매번 명령행에서 직접 지정합니다. preset만 주면 주행 모드 확인에서 멈추고 로봇은 움직이지 않습니다. 관찰만 할 때는 `--mode observe`를 명령행에 추가해 preset의 `drive` 값을 덮어쓰고, `--model /경로/모델.pt`로 다른 모델을 사용할 수 있습니다. 설치된 preset은 `$(ros2 pkg prefix pinky_fleet)/share/pinky_fleet/config/vision_drive_supervised.yaml`에도 복사됩니다.
+`--preset`은 모션 허용·감독 확인, 모델, 카메라, 탐지, 주행 속도·조향, 횡단보도 정책과 저장 옵션을 불러옵니다. 이 preset에는 `enable_motion: true`가 포함되어 있어 실행하면 실제 주행 명령이 활성화됩니다. 사람이 로봇 옆에서 직접 감독할 준비가 되었을 때만 실행하세요. 명령행 값은 preset보다 우선하며 boolean 값은 `--no-enable-motion`처럼 끌 수도 있습니다. 로봇 IP는 네트워크에 따라 달라지므로 명령행에서 지정합니다. 관찰만 할 때는 `--mode observe`를 명령행에 추가해 preset의 `drive` 값을 덮어쓰고, `--model /경로/모델.pt`로 다른 모델을 사용할 수 있습니다. 설치된 preset은 `$(ros2 pkg prefix pinky_fleet)/share/pinky_fleet/config/vision_drive_supervised.yaml`에도 복사됩니다.
 
 주변에 IP가 같은 Pinky가 여럿 있으면(공유기가 달라도 `192.168.0.x`가 겹칠 수 있음) 엉뚱한 로봇의 카메라에 명령이 갈 수 있습니다. 이때는 `--ble-name pinky_6422`처럼 로봇의 BLE 이름을 지정합니다. `tape_lane_drive`도 같은 인자를 받습니다.
 
@@ -137,7 +136,7 @@ ros2 run pinky_fleet vision_drive --robot-ip 192.168.0.6 \
 
 YOLOTL의 `lane` 마스크는 도로/BEV 시점의 차선 데이터로 학습된 결과이며 Pinky 바닥의 주행 가능 영역으로 검증되지 않았습니다. 이 명령은 관찰·샘플 저장용입니다. 저장한 원본 프레임을 코스 장면별로 선별·라벨링해 전용 모델을 학습해야 합니다. COCO 기본 모델은 흰 테이프 차선, 횡단보도, 학습되지 않은 사용자 정의 장애물을 인식하지 않으며, YOLOTL은 `lane`만 탐지합니다. 실물 장애물 안전 정지는 LiDAR/Nav2 경로를 유지해야 합니다.
 
-`q` 또는 Ctrl+C로 종료하면 0 속도를 반복 발행하고 카메라 중지를 요청합니다. 정상 종료 시 동작이며 강제 종료 시 정지를 보장하지 않습니다. 저속 실험에서 최대 전진 속도는 `0.05 m/s`, 최대 각속도는 `0.25 rad/s`로 제한됩니다. `--steering-gain` 기본값은 `1.2`이며, 영상 오버레이의 자홍색 선이 먼 쪽 mask를 바탕으로 계산한 조향 미리보기입니다. 급회전에서는 `v / |w|`가 기본 반경 `0.08 m`를 넘지 않게 전진 속도를 자동으로 줄여 넓게 밀고 나가는 동작을 억제합니다. `--turn-radius-limit`으로 바꿀 수 있습니다. `--stop-distance`는 0.20 m 이상이어야 합니다. 전방 LiDAR는 인접 측정값들이 이어진 물체의 가로 폭이 `--obstacle-min-width` 이상일 때만 장애물로 처리하며, 기본값은 0.12 m입니다. 바닥의 작은 점/테이프 자국 같은 작은 반사물은 무시될 수 있습니다. 더 큰 물체만 정지 대상으로 잡으려면 이 값을 키우세요. 작은 장애물은 감지하지 못할 수 있으므로 주변을 비운 감독 실험에서만 사용하세요. 기본 횡단보도 정책은 `stop-then-go`이며 10초 정지 후 재개합니다. `--crosswalk-action slow|stop|stop-then-go|ignore`와 `--crosswalk-stop-seconds`로 바꿀 수 있습니다. 주행 영역이 잠깐 사라지면 마지막 조향 방향으로 최대 0.6초 제자리 재탐색한 뒤, 복구되지 않으면 정지합니다. 속도·정지 기준의 현장 성능을 확인하고 이 prototype 결과를 대시보드의 Nav2 경로에 연결하려면 별도 보정 및 안전 검토가 필요합니다. [MVP 요구사항 대응표와 실행 예시](../../../docs/vision_drive_mvp.md)를 참고하세요.
+`q` 또는 Ctrl+C로 종료하면 0 속도를 반복 발행하고 카메라 중지를 요청합니다. 정상 종료 시 동작이며 강제 종료 시 정지를 보장하지 않습니다. 저속 실험에서 최대 전진 속도는 `0.05 m/s`, 최대 각속도는 `0.25 rad/s`로 제한됩니다. `--steering-gain` 기본값은 `1.2`이며, 조향은 가까운 주행 영역의 중심을 우선 따라가고, preset의 `--far-lookahead-weight 0.32`로 먼 쪽 mask를 더 반영해 코너 진입을 준비합니다. 영상 오버레이의 자홍색 선은 이 중심 경로의 조향 미리보기입니다. 급회전에서는 `v / |w|`가 preset 반경 `0.12 m`를 넘지 않도록 전진 속도를 제한합니다. `--turn-radius-limit`으로 바꿀 수 있습니다. `--stop-distance`는 0.20 m 이상이어야 합니다. 전방 LiDAR는 인접 측정값들이 이어진 물체의 가로 폭이 `--obstacle-min-width` 이상일 때만 장애물로 처리하며, 기본값은 0.12 m입니다. 바닥의 작은 점/테이프 자국 같은 작은 반사물은 무시될 수 있습니다. 더 큰 물체만 정지 대상으로 잡으려면 이 값을 키우세요. 작은 장애물은 감지하지 못할 수 있으므로 주변을 비운 감독 실험에서만 사용하세요. 기본 횡단보도 정책은 `stop-then-go`이며 10초 정지 후 재개합니다. `--crosswalk-action slow|stop|stop-then-go|ignore`와 `--crosswalk-stop-seconds`로 바꿀 수 있습니다. 조향 계산은 가까운 구간 mask 두 줄 이상과 먼 구간 mask 한 줄 이상이 있을 때 유효합니다. 직각 코너에서 mask를 잃으면 odometry로 회전량을 재며 최소 30도, 최대 110도까지 마지막 방향으로 재탐색합니다. 최소 각도에 도달한 뒤 차선 중심 오차가 5프레임 연속 기준 안에 들어오면 복귀합니다. 회전이 진행되지 않거나 각도·시간 한도에 닿으면 정지합니다. 일반적인 짧은 mask 손실은 마지막 방향으로 최대 0.8초 재탐색합니다. 실행별 로그 파일은 `~/vision_drive_observations/logs/vision_drive_<시각>_<pid>.log`에 저장되며, `--log-dir`로 디렉터리를 바꿀 수 있습니다. 로그에는 인식 판단과 최종 발행 속도, 전방 LiDAR 거리가 기록됩니다. 속도·정지 기준의 현장 성능을 확인하고 이 prototype 결과를 대시보드의 Nav2 경로에 연결하려면 별도 보정 및 안전 검토가 필요합니다. [MVP 요구사항 대응표와 실행 예시](../../../docs/vision_drive_mvp.md)를 참고하세요.
 
 ### 내려받은 공개 차선 모델
 
