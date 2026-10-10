@@ -91,6 +91,8 @@ def parse_args(argv=None):
                         help='OpenCV 영상 창을 띄우지 않음')
     parser.add_argument('--output-dir', default='~/vision_drive_observations',
                         help='관찰 모드에서 프레임/결과를 저장할 디렉터리')
+    parser.add_argument('--log-dir', default='~/vision_drive_observations/logs',
+                        help='실행별 로그 파일을 저장할 디렉터리')
     raw_args = list(os.sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(raw_args)
     supplied = {
@@ -535,8 +537,16 @@ def _policy(node, mask, detections, args, inference_at, camera_at):
 
 
 def main():
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     args = parse_args()
+    log_dir = Path(args.log_dir).expanduser()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"vision_drive_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{os.getpid()}.log"
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s %(levelname)s %(message)s',
+        handlers=(logging.StreamHandler(), logging.FileHandler(log_path, encoding='utf-8')),
+    )
+    LOGGER.info('실행 로그 파일: %s', log_path)
     model_path = Path(args.model).expanduser()
     if not model_path.is_file():
         raise SystemExit(f'학습 모델 파일을 찾을 수 없습니다: {model_path}')
@@ -701,6 +711,9 @@ def main():
                 node.command_pub.publish(command)
                 last_control_at = time.monotonic()
                 current_command = (linear, angular, reason)
+                front_text = '없음' if front is None else f'{front:.2f}m'
+                LOGGER.info('drive publish policy=%s command=(v=%.3f,w=%.3f) front=%s',
+                            reason, linear, angular, front_text)
 
             if not args.headless and overlay is not None:
                 cv2.imshow('Pinky vision drive (q = stop)', overlay)

@@ -18,7 +18,7 @@ crosswalk_stop_seconds: 10.0
 max_linear: 0.05
 max_angular: 0.25
 steering_gain: 1.2
-far_lookahead_weight: 0.32
+far_lookahead_weight: 0.42
 turn_radius_limit: 0.12
 stop_distance: 0.35
 obstacle_min_width: 0.12

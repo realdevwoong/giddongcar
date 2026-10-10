@@ -21,7 +21,7 @@
 
 ## 감독형 실행 예시
 
-주행 값은 감독형 preset(`pinky_pro/src/pinky_fleet/config/vision_drive_supervised.yaml`)에 모아 두었다. 전진 속도 상한 `0.05 m/s`, 각속도 상한 `0.25 rad/s`, 먼 쪽 곡률 신호를 반영하는 `--steering-gain` `1.2`, 먼 쪽 mask 비중 `0.32`, 코너 반경 제한 `0.12 m`, 라이다 정지 기준 `0.35 m`, 횡단보도 10초 정지다. 모델 경로는 `~/vision_drive_observations/train_runs/lane_seg_v1/weights/best.pt`를 가정한다. preset에 모션 허용과 감독 확인 옵션도 저장되어 있어 preset 실행만으로 주행이 활성화된다. 로봇 IP는 명령행에 지정한다.
+주행 값은 감독형 preset(`pinky_pro/src/pinky_fleet/config/vision_drive_supervised.yaml`)에 모아 두었다. 전진 속도 상한 `0.05 m/s`, 각속도 상한 `0.25 rad/s`, 먼 쪽 곡률 신호를 반영하는 `--steering-gain` `1.2`, 먼 쪽 mask 비중 `0.42`(코너 진입을 일찍 준비), 코너 반경 제한 `0.12 m`, 라이다 정지 기준 `0.35 m`, 횡단보도 10초 정지다. 모델 경로는 `~/vision_drive_observations/train_runs/lane_seg_v1/weights/best.pt`를 가정한다. preset에 모션 허용과 감독 확인 옵션도 저장되어 있어 preset 실행만으로 주행이 활성화된다. 로봇 IP는 명령행에 지정한다.
 
 ```bash
 ros2 run pinky_fleet vision_drive \
