@@ -9,7 +9,7 @@
 | **PC에서, 여러 대를 조율** | 관제 UI, 로봇별 Nav2 실행, 두 대 충돌 방지, 시뮬 launch, 지도 | `pinky_fleet` |
 | **센서 처리** (PC 또는 로봇) | 카메라 영상 구독, 객체·차선 탐지, 탐지 결과 발행 | `pinky_camera` (새로 만들 것) |
 | **로봇 한 대 안에서** | 모터, 라이다, odom, LED, LCD | 제조사 `pinky_bringup` 등. 고치지 않는다 |
-| **제조사 Nav2 설정** | `nav2_params.yaml`, `bringup_launch.xml` | `pinky_navigation`. 값을 바꾸고 싶으면 원본 대신 `pinky_fleet/params/`에 복사본을 두고 `params_file:=`로 넘긴다 |
+| **제조사 Nav2 설정** | `nav2_params.yaml`, `bringup_launch.xml` | `pinky_navigation`. 값은 원본 대신 팀 복사본 `pinky_fleet/params/nav2_params.yaml`에서 고친다(launch 기본값) |
 | **제조사 설정 파일의 팀 수정본** | 가제보 월드(물리 step), Nav2 params | `pinky_fleet/worlds/`, `pinky_fleet/params/`. 복사본 첫 줄에 원본과 무엇이 다른지 적는다 |
 
 이름은 `pinky_<역할>`. 사람 이름 폴더는 만들지 않는다.

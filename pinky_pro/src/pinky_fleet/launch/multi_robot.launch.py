@@ -102,7 +102,9 @@ def start(context):
             # 위치를 알려 준 로봇은 전역 위치 찾기를 하지 않는다. 나머지는 대시보드가 켜지자마자 스스로 찾는다
             + [arg for i, pose in enumerate(poses, 1) if pose for arg in ('--known-pose', f'robot{i}')]
             + (['--auto-spin'] if auto_spin else [])
-            + (['--traffic-zones', value('traffic_zones')] if value('traffic_zones') else []), output='screen'))
+            # ros2 launch는 빈 값(traffic_zones:=)을 받지 않는다. 끌 때는 traffic_zones:=off
+            + (['--traffic-zones', value('traffic_zones')] if value('traffic_zones') not in ('', 'off') else []),
+            output='screen'))
     handlers = [RegisterEventHandler(OnProcessExit(
         target_action=p, on_exit=[EmitEvent(event=Shutdown(reason='A fleet process exited'))]))
         for p in processes]
@@ -139,7 +141,7 @@ def generate_launch_description():
                               description='true: 위치를 모르는 로봇은 AMCL이 켜지자마자 제자리에서 한 바퀴 돌며 위치를 찾는다'
                                           '(실물이 사람 확인 없이 움직인다. 끝나면 0 속도). false: 가만히 찾고 ⟳ 버튼으로만 돈다'),
         DeclareLaunchArgument('traffic_zones', default_value=str(fleet / 'params' / 'traffic_good3.yaml'),
-                              description='교통 정리 구역 YAML(좁은 문에 한 대씩). 비우면(traffic_zones:=) 끈다. '
+                              description='교통 정리 구역 YAML(좁은 문에 한 대씩). 끄려면 traffic_zones:=off. '
                                           '지도가 구역 파일과 다르면 대시보드가 스스로 끈다'),
         OpaqueFunction(function=start),
     ])

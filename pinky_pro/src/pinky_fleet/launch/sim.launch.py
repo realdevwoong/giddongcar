@@ -97,7 +97,9 @@ def generate_launch_description():
                               description='Nav2 두 개와 웹 대시보드(multi_robot.launch.py)도 실행'),
         DeclareLaunchArgument('port', default_value='8080', description='웹 대시보드 포트'),
         DeclareLaunchArgument('traffic_zones', default_value=str(FLEET / 'params/traffic_good3.yaml'),
-                              description='교통 정리 구역 YAML(문에 한 대씩). 비우면(traffic_zones:=) 끈다'),
+                              description='교통 정리 구역 YAML(문에 한 대씩). 끄려면 traffic_zones:=off'),
+        DeclareLaunchArgument('params_file', default_value=str(FLEET / 'params/nav2_params.yaml'),
+                              description='Nav2 설정(실물과 같은 팀용 복사본). 값을 시험할 때는 복사해서 params_file:=로 넘긴다'),
         # 생성 위치: good3 지도의 빈 곳(가장 가까운 벽까지 robot1 0.18 m, robot2 0.36 m). robot1은 왼쪽 방, robot2는 오른쪽 방
         DeclareLaunchArgument('robot1_domain', default_value='25'),
         DeclareLaunchArgument('robot1_x', default_value='0.5'),
@@ -140,7 +142,7 @@ def generate_launch_description():
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(FLEET / 'launch/multi_robot.launch.py')),
             launch_arguments={'use_sim_time': 'true', 'map': config('map'), 'port': config('port'),
-                              'traffic_zones': config('traffic_zones'),
+                              'traffic_zones': config('traffic_zones'), 'params_file': config('params_file'),
                               'robot1_domain': config('robot1_domain'),
                               'robot2_domain': config('robot2_domain'),
                               # 생성 위치를 알고 있으니 초기 위치를 사람이 찍지 않아도 된다
